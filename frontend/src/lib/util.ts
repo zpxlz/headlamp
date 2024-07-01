@@ -47,7 +47,7 @@ export function timeAgo(date: DateParam, options: TimeAgoOptions = {}) {
   const fromDate = new Date(date);
   let now = new Date();
 
-  if (process.env.UNDER_TEST === 'true') {
+  if (import.meta.env.UNDER_TEST === 'true') {
     // For testing, we consider the current moment to be 3 months from the dates we are testing.
     const days = 24 * 3600 * 1000; // in ms
     now = new Date(fromDate.getTime() + 90 * days);
@@ -87,7 +87,7 @@ export function localeDate(date: DateParam) {
   let locale: string | undefined = undefined;
 
   // Force the same conditions under test, so snapshots are the same.
-  if (process.env.UNDER_TEST === 'true') {
+  if (import.meta.env.UNDER_TEST === 'true') {
     options.timeZone = 'UTC';
     options.hour12 = true;
     locale = 'en-US';
@@ -146,8 +146,9 @@ export function getResourceMetrics(
 }
 
 /**
- * @returns A filter function that can be used to filter a list of items.
+ * Get a function to filter kube resources based on the current global filter state.
  *
+ * @returns A filter function that can be used to filter a list of items.
  * @param matchCriteria - The JSONPath criteria to match.
  */
 export function useFilterFunc<
@@ -157,11 +158,11 @@ export function useFilterFunc<
 >(matchCriteria?: string[]) {
   const filter = useTypedSelector(state => state.filter);
 
-  return (item: T) => {
+  return (item: T, search?: string) => {
     if (!!item.metadata) {
-      return filterResource(item as KubeObjectInterface | KubeEvent, filter, matchCriteria);
+      return filterResource(item as KubeObjectInterface | KubeEvent, filter, search, matchCriteria);
     }
-    return filterGeneric<T>(item, filter, matchCriteria);
+    return filterGeneric<T>(item, search, matchCriteria);
   };
 }
 
@@ -388,7 +389,9 @@ export function normalizeUnit(resourceType: string, quantity: string) {
  */
 export function useId(prefix = '') {
   const [id] = React.useState<string | undefined>(
-    process.env.UNDER_TEST === 'true' ? prefix + 'id' : prefix + Math.random().toString(16).slice(2)
+    import.meta.env.UNDER_TEST === 'true'
+      ? prefix + 'id'
+      : prefix + Math.random().toString(16).slice(2)
   );
 
   return id;

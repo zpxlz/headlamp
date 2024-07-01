@@ -166,10 +166,14 @@ func baseURLReplace(staticDir string, baseURL string) {
 
 	copyReplace(indexBaseURL,
 		index,
+		[]byte("headlampBaseUrl = './'"),
+		[]byte("headlampBaseUrl = '"+replaceURL+"'"),
+		// Replace any resource that has "./" in it
 		[]byte("./"),
-		[]byte(baseURL+"/"),
-		[]byte("headlampBaseUrl=\".\""),
-		[]byte("headlampBaseUrl=\""+replaceURL+"\""))
+		[]byte(baseURL+"/"))
+
+	// Insert baseURL in css url() imports, they don't have "./" in them
+	copyReplace(index, index, []byte("url("), []byte("url("+baseURL+"/"), []byte(""), []byte(""))
 }
 
 func getOidcCallbackURL(r *http.Request, config *HeadlampConfig) string {
@@ -817,10 +821,7 @@ func (c *HeadlampConfig) OIDCTokenRefreshMiddleware(next http.Handler) http.Hand
 		// skip if cluster is not using OIDC auth
 		oidcAuthConfig, err := kContext.OidcConfig()
 		if err != nil {
-			logger.Log(logger.LevelError, map[string]string{"cluster": cluster},
-				err, "failed to get oidc config")
 			next.ServeHTTP(w, r)
-
 			return
 		}
 
@@ -1007,7 +1008,7 @@ func handleClusterAPI(c *HeadlampConfig, router *mux.Router) {
 		}
 
 		r.Host = clusterURL.Host
-		r.Header.Set("X-Forwarded-Host", r.Header.Get("Host"))
+		r.Header.Set("X-Forwarded-Host", r.Host)
 		r.URL.Host = clusterURL.Host
 		r.URL.Path = mux.Vars(r)["api"]
 		r.URL.Scheme = clusterURL.Scheme

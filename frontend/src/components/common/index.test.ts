@@ -36,6 +36,7 @@ const checkExports = [
   'SectionHeader',
   'ShowHideLabel',
   'SimpleTable',
+  'Table',
   'Tabs',
   'Terminal',
   'TileChart',
@@ -72,9 +73,9 @@ describe('Import tests', () => {
     });
   });
 
-  test('Check imports', () => {
-    filesToVerify.forEach((file: string) => {
-      const r = require(`./${file}`);
+  test('Check imports', async () => {
+    for (const file of filesToVerify) {
+      const r = await import(`./${file}`);
 
       // Check that all components are exported.
       for (const key in r) {
@@ -85,6 +86,6 @@ describe('Import tests', () => {
           expect(AllComps).toHaveProperty(key);
         }
       }
-    });
+    }
   });
 });

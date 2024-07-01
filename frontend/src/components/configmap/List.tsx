@@ -7,7 +7,7 @@ export default function ConfigMapList() {
 
   return (
     <ResourceListView
-      title={t('Config Maps')}
+      title={t('glossary|Config Maps')}
       resourceClass={ConfigMap}
       columns={[
         'name',
@@ -15,8 +15,7 @@ export default function ConfigMapList() {
         {
           id: 'data',
           label: t('translation|Data'),
-          getter: (configmap: ConfigMap) => Object.keys(configmap.data || {}).length || 0,
-          sort: true,
+          getValue: (configmap: ConfigMap) => Object.keys(configmap.data || {}).length || 0,
           gridTemplate: 0.5,
         },
         'age',

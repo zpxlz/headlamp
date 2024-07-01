@@ -1,6 +1,6 @@
 {
   "name": "headlamp",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Easy-to-use and extensible Kubernetes web UI",
   "main": "electron/main.js",
   "homepage": "https://github.com/headlamp-k8s/headlamp/#readme",
@@ -142,21 +142,22 @@
     "name": "Kinvolk",
     "email": "hello@kinvolk.io"
   },
+  "prettier": "@kinvolk/eslint-config/prettier-config",
   "devDependencies": {
     "@babel/cli": "^7.15.7",
     "@babel/core": "^7.15.8",
     "@babel/preset-env": "^7.15.8",
     "@babel/preset-typescript": "^7.15.0",
     "@electron/notarize": "^2.1.0",
-    "electron": "^27.0.4",
-    "electron-builder": "^24.9.1",
+    "electron": "^30.0.6",
+    "electron-builder": "^24.13.3",
     "fs-extra": "^8.1.0",
     "i18next-parser": "^7.7.0",
     "jest": "^27.4.7",
     "mime-types": "^2.1.35",
     "octokit": "^2.0.14",
     "tar": "^6.1.13",
-    "typescript": "^4.4.3"
+    "typescript": "4.5.5"
   },
   "dependencies": {
     "@types/semver": "^7.3.8",

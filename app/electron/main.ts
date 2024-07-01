@@ -7,6 +7,8 @@ import { IpcMainEvent, MenuItemConstructorOptions } from 'electron/main';
 import log from 'electron-log';
 import find_process from 'find-process';
 import fs from 'fs';
+import { spawnSync } from 'node:child_process';
+import { userInfo } from 'node:os';
 import open from 'open';
 import path from 'path';
 import url from 'url';
@@ -15,6 +17,54 @@ import i18n from './i18next.config';
 import windowSize from './windowSize';
 
 dotenv.config({ path: path.join(process.resourcesPath, '.env') });
+
+const pathInfoDebug = false;
+let pathInfo;
+
+/**
+ * On MacOS apps do not get the same environment variables as the terminal.
+ *
+ * However we want the same PATH as the shell to run the users terminal programs.
+ */
+function addPathFromShellToEnvOnMac() {
+  if (process.platform !== 'darwin') {
+    // only necessary on MacOS
+    return;
+  }
+  if (process.env.TERM_PROGRAM) {
+    // if we are running in a terminal then we already have the correct PATH
+    return;
+  }
+
+  let defaultShell;
+  try {
+    defaultShell = userInfo().shell || '/bin/zsh';
+  } catch (error) {
+    defaultShell = '/bin/zsh';
+  }
+
+  // login interactive shell
+  // f option is to prevent menu on zshell when user has no config.
+  // DISABLE_AUTO_UPDATE is to prevent the shell from updating.
+  const env = { ...process.env, DISABLE_AUTO_UPDATE: 'true' };
+  const result = spawnSync(defaultShell, ['--login', '-fic', 'echo $PATH'], {
+    env: env,
+    encoding: 'utf-8',
+    timeout: 8000, // in case it's stuck
+  });
+
+  if (result.status === 0) {
+    const path = result.stdout.toString();
+    pathInfo = {
+      previousPath: process.env.PATH,
+      newPath: path,
+    };
+    process.env.PATH = path;
+  } else {
+    console.error('Failed to get shell PATH, just using process.env.PATH');
+  }
+}
+addPathFromShellToEnvOnMac();
 
 const args = yargs
   .command('$0 [kubeconfig]', '', yargs => {
@@ -506,7 +556,7 @@ function startElecron() {
       frontendPath = path.join(process.resourcesPath, 'frontend', 'index.html');
     }
 
-    const startUrl =
+    const startUrl = (
       process.env.ELECTRON_START_URL ||
       url.format({
         pathname: frontendPath,
@@ -515,7 +565,13 @@ function startElecron() {
         query: {
           backendToken: backendToken,
         },
-      });
+      })
+    )
+      // Windows paths use backslashes and for consistency we want to use forward slashes.
+      // For example: when application triggers refresh it requests a URL with forward slashes and
+      // we use startUrl to determine if it's an internal or external URL. So it's easier to
+      // convert everything to forward slashes.
+      .replace(/\\/g, '/');
 
     // WSL has a problem with full size window placement, so make it smaller.
     const withMargin = isWSL();
@@ -574,6 +630,7 @@ function startElecron() {
       if (url.startsWith(startUrl)) {
         return;
       }
+      event.preventDefault();
       shell.openExternal(url);
     });
 
@@ -616,6 +673,14 @@ function startElecron() {
       loadFullMenu = true;
       console.info('Plugins are loaded. Loading full menu.');
       setMenu(mainWindow, currentMenu);
+
+      if (pathInfoDebug) {
+        dialog.showMessageBoxSync(mainWindow, {
+          type: 'info',
+          title: 'Path debug info',
+          message: JSON.stringify(pathInfo),
+        });
+      }
     });
 
     ipcMain.on('setMenu', (event: IpcMainEvent, menus: any) => {

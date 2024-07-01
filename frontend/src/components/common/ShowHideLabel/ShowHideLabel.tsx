@@ -1,14 +1,7 @@
 import { Icon } from '@iconify/react';
 import { Box, IconButton } from '@mui/material';
-import makeStyles from '@mui/styles/makeStyles';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-
-const useStyles = makeStyles({
-  fullText: {
-    wordBreak: 'break-all',
-  },
-});
 
 export interface ShowHideLabelProps {
   children: string;
@@ -21,10 +14,9 @@ export default function ShowHideLabel(props: ShowHideLabelProps) {
   const { show = false, labelId = '', maxChars = 256, children } = props;
   const { t } = useTranslation();
   const [expanded, setExpanded] = React.useState(show);
-  const classes = useStyles();
 
   const labelIdOrRandom = React.useMemo(() => {
-    if (!!labelId || !!process.env.UNDER_TEST) {
+    if (!!labelId || !!import.meta.env.UNDER_TEST) {
       return labelId;
     }
 
@@ -51,7 +43,7 @@ export default function ShowHideLabel(props: ShowHideLabelProps) {
     <Box display={expanded ? 'block' : 'flex'}>
       <label
         id={labelIdOrRandom}
-        className={classes.fullText}
+        style={{ wordBreak: 'break-all', whiteSpace: 'normal' }}
         aria-expanded={!needsButton ? undefined : expanded}
       >
         {actualText}

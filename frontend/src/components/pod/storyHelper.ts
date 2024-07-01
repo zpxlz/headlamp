@@ -111,9 +111,18 @@ const imgPullBackOff = {
             message: 'Back-off pulling image "doesnotexist:nover"',
           },
         },
-        lastState: {},
+        lastState: {
+          terminated: {
+            exitCode: 1,
+            reason: 'ImagePullBackOff',
+            message: 'Back-off pulling image "doesnotexist:nover"',
+            startedAt: stateDate,
+            finishedAt: stateDate,
+            containerID: '1234abcd',
+          },
+        },
         ready: false,
-        restartCount: 0,
+        restartCount: 1,
         image: 'doesnotexist:nover',
         imageID: '',
         started: false,
@@ -141,7 +150,7 @@ const successful = {
     restartPolicy: 'Never',
   },
   status: {
-    ...basePod.status,
+    startTime: stateDate,
     phase: 'Succeeded',
     conditions: [
       {

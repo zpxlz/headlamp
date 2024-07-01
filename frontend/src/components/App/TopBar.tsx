@@ -1,15 +1,14 @@
 import { Icon } from '@iconify/react';
 import AppBar from '@mui/material/AppBar';
+import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
-import { Theme, useTheme } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 import Toolbar from '@mui/material/Toolbar';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import createStyles from '@mui/styles/createStyles';
-import makeStyles from '@mui/styles/makeStyles';
 import { has } from 'lodash';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +22,6 @@ import {
   AppBarAction,
   AppBarActionsProcessor,
   DefaultAppBarAction,
-  HeaderAction,
   HeaderActionType,
 } from '../../redux/actionButtonsSlice';
 import { setVersionDialogOpen } from '../../redux/actions/actions';
@@ -130,44 +128,11 @@ export interface PureTopBarProps {
   onToggleOpen: () => void;
 }
 
-const useStyles = makeStyles((theme: Theme) =>
-  createStyles({
-    appbar: {
-      marginLeft: drawerWidth,
-      zIndex: theme.zIndex.drawer + 1,
-      '& > *': {
-        color: theme.palette.text.primary,
-      },
-      backgroundColor: theme.palette.background.default,
-    },
-    toolbar: {
-      [theme.breakpoints.down('xs')]: {
-        paddingLeft: 0,
-        paddingRight: 0,
-      },
-    },
-    grow: {
-      flexGrow: 1,
-    },
-    clusterTitle: {
-      paddingRight: theme.spacing(10),
-    },
-    versionLink: {
-      textAlign: 'center',
-    },
-    userMenu: {
-      '& .MuiMenu-list': {
-        paddingBottom: 0,
-      },
-    },
-  })
-);
-
 function AppBarActionsMenu({ appBarActions }: { appBarActions: HeaderActionType[] }) {
   const actions = (function stateActions() {
     return React.Children.toArray(
       appBarActions.map(action => {
-        const Action = has(action, 'action') ? (action as HeaderAction).action : action;
+        const Action = has(action, 'action') ? action.action : action;
         if (React.isValidElement(Action)) {
           return (
             <ErrorBoundary>
@@ -195,7 +160,7 @@ function AppBarActions({ appBarActions }: { appBarActions: HeaderActionType[] })
   const actions = (function stateActions() {
     return React.Children.toArray(
       appBarActions.map(action => {
-        const Action = has(action, 'action') ? (action as HeaderAction).action : action;
+        const Action = has(action, 'action') ? action.action : action;
         if (React.isValidElement(Action)) {
           return <ErrorBoundary>{Action}</ErrorBoundary>;
         } else if (Action === null) {
@@ -233,7 +198,6 @@ export function PureTopBar({
 
   const openSideBar = !!(isSidebarOpenUserSelected === undefined ? false : isSidebarOpen);
 
-  const classes = useStyles({ isSidebarOpen, isSmall });
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
   const [mobileMoreAnchorEl, setMobileMoreAnchorEl] = React.useState<null | HTMLElement>(null);
   const isClusterContext = !!cluster;
@@ -272,7 +236,11 @@ export function PureTopBar({
         handleMobileMenuClose();
       }}
       style={{ zIndex: 1400 }}
-      className={classes.userMenu}
+      sx={{
+        '& .MuiMenu-list': {
+          paddingBottom: 0,
+        },
+      }}
     >
       <MenuItem
         component="a"
@@ -378,9 +346,13 @@ export function PureTopBar({
     {
       id: DefaultAppBarAction.CLUSTER,
       action: (
-        <div className={classes.clusterTitle}>
+        <Box
+          sx={theme => ({
+            paddingRight: theme.spacing(10),
+          })}
+        >
           <ClusterTitle cluster={cluster} clusters={clusters} onClick={handleMobileMenuClose} />
-        </div>
+        </Box>
       ),
     },
     ...appBarActions,
@@ -412,17 +384,31 @@ export function PureTopBar({
     <>
       <AppBar
         position="fixed"
-        className={classes.appbar}
+        sx={theme => ({
+          marginLeft: drawerWidth,
+          zIndex: theme.zIndex.drawer + 1,
+          '& > *': {
+            color: theme.palette.text.primary,
+          },
+          backgroundColor: theme.palette.background.default,
+        })}
         elevation={1}
         component="nav"
         aria-label={t('Appbar Tools')}
         enableColorOnDark
       >
-        <Toolbar className={classes.toolbar}>
+        <Toolbar
+          sx={{
+            [theme.breakpoints.down('sm')]: {
+              paddingLeft: 0,
+              paddingRight: 0,
+            },
+          }}
+        >
           {isSmall ? (
             <>
               <HeadlampButton open={openSideBar} onToggleOpen={onToggleOpen} />
-              <div className={classes.grow} />
+              <Box sx={{ flexGrow: 1 }} />
               <IconButton
                 aria-label={t('show more')}
                 aria-controls={mobileMenuId}
@@ -437,7 +423,7 @@ export function PureTopBar({
           ) : (
             <>
               <AppLogo />
-              <div className={classes.grow} />
+              <Box sx={{ flexGrow: 1 }} />
               <AppBarActions
                 appBarActions={processAppBarActions(allAppBarActions, appBarActionsProcessors)}
               />

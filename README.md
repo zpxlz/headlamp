@@ -1,4 +1,6 @@
-# Headlamp <img align="right" width=384 src="docs/headlamp_light.svg"> [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/7551/badge)](https://www.bestpractices.dev/projects/7551)
+# Headlamp <img align="right" width=384 src="docs/headlamp_light.svg"> [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/7551/badge)](https://www.bestpractices.dev/projects/7551) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/headlamp-k8s/headlamp/badge)](https://scorecard.dev/viewer/?uri=github.com/headlamp-k8s/headlamp)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fheadlamp-k8s%2Fheadlamp.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fheadlamp-k8s%2Fheadlamp?ref=badge_shield)
+
 
 Headlamp is an easy-to-use and extensible Kubernetes web UI.
 
@@ -11,15 +13,15 @@ web UIs/dashboards available (i.e. to list and view resources) as well as other 
 
 ## Features
 
-  * Vendor independent / generic Kubernetes UI
-  * Works in-cluster, or locally as a desktop app
-  * Multi-cluster
-  * Extensible through plugins
-  * UI controls reflecting user roles (no deletion/update if not allowed)
-  * Clean & modern UI
-  * Cancellable creation/update/deletion operations
-  * Logs, exec, and resource editor with documentation
-  * Read-write / interactive (actions based on permissions)
+- Vendor independent / generic Kubernetes UI
+- Works in-cluster, or locally as a desktop app
+- Multi-cluster
+- Extensible through plugins
+- UI controls reflecting user roles (no deletion/update if not allowed)
+- Clean & modern UI
+- Cancellable creation/update/deletion operations
+- Logs, exec, and resource editor with documentation
+- Read-write / interactive (actions based on permissions)
 
 ## Screenshots
 
@@ -86,3 +88,8 @@ biggest changes planned so far.
 ## License
 
 Headlamp is released under the terms of the [Apache 2.0](./LICENSE) license.
+
+
+## Frequently Asked Questions
+
+For more information about Headlamp, see the [Headlamp FAQ](https://headlamp.dev/docs/latest/faq/).
