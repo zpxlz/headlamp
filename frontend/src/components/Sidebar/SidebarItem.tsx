@@ -1,151 +1,60 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import Collapse from '@mui/material/Collapse';
+import Divider from '@mui/material/Divider';
 import List from '@mui/material/List';
-import ListItem, { ListItemProps } from '@mui/material/ListItem';
-import makeStyles from '@mui/styles/makeStyles';
-import clsx from 'clsx';
-import React from 'react';
+import ListItem, { type ListItemProps } from '@mui/material/ListItem';
+import ListSubheader from '@mui/material/ListSubheader';
+import type { SxProps, Theme } from '@mui/material/styles';
+import { alpha } from '@mui/material/styles';
+import React, { memo } from 'react';
 import { generatePath } from 'react-router';
-import { createRouteURL, getRoute } from '../../lib/router';
-import { getCluster, getClusterPrefixedPath } from '../../lib/util';
+import { formatClusterPathParam, getClusterPrefixedPath } from '../../lib/cluster';
+import { useSelectedClusters } from '../../lib/k8s';
+import { createRouteURL } from '../../lib/router/createRouteURL';
+import { getRoute } from '../../lib/router/getRoute';
 import ListItemLink from './ListItemLink';
 import { SidebarEntry } from './sidebarSlice';
 
-const useItemStyle = makeStyles(theme => ({
-  link: {
-    color: theme.palette.sidebarLink.color,
-    borderRadius: '4px',
-    marginRight: '5px',
-    marginLeft: theme.spacing(5),
-    marginBottom: '1px',
-
-    '& *': {
-      fontSize: '.875rem',
-      textTransform: 'none',
-    },
-    '& .MuiListItem-root': {
-      paddingTop: '4px',
-      paddingBottom: '4px',
-    },
-    '& .MuiListItem-button:hover': {
-      backgroundColor: 'unset',
-    },
-    '&:hover': {
-      backgroundColor: theme.palette.sidebarLink.hover.backgroundColor,
-
-      '& svg': {
-        color: theme.palette.sidebarLink.hover.color,
-      },
-    },
-    '& a.Mui-focusVisible': {
-      backgroundColor: theme.palette.sidebarLink.hover.backgroundColor,
-    },
-    '& svg': {
-      color: theme.palette.sidebarLink.color,
-    },
-    '& .MuiListItemIcon-root': {
-      minWidth: 0,
-      alignSelf: (props: { fullWidth: boolean; hasSubtitle: boolean }) =>
-        props.fullWidth && props.hasSubtitle ? 'stretch' : 'auto',
-      paddingTop: (props: { fullWidth: boolean; hasSubtitle: boolean }) =>
-        props.fullWidth && props.hasSubtitle ? theme.spacing(1) : 0,
-      marginRight: (props: { fullWidth: boolean }) => (props.fullWidth ? '8px' : '0'),
-    },
-    '& .MuiListItemText-secondary': {
-      fontSize: '.85rem',
-      fontStyle: 'italic',
-      whiteSpace: 'nowrap',
-      textOverflow: 'ellipsis',
-      overflowWrap: 'anywhere',
-      overflow: 'hidden',
-      color: theme.palette.sidebarLink.color,
-    },
-  },
-  linkMain: {
-    textTransform: 'uppercase',
-    color: theme.palette.sidebarLink.main.color,
-    marginLeft: '5px',
-    marginRight: '5px',
-    borderRadius: '4px',
-
-    '& .MuiListItem-root': {
-      paddingTop: (props: { hasSubtitle: boolean }) => (props.hasSubtitle ? '0' : '7px'),
-      paddingBottom: (props: { hasSubtitle: boolean }) => (props.hasSubtitle ? '0' : '7px'),
-      paddingLeft: '19px',
-      minHeight: (props: { fullWidth: boolean }) => (!props.fullWidth ? '56px' : 'unset'),
-    },
-
-    '& *': {
-      fontSize: '1rem',
-    },
-
-    '&:hover, &:active': {
-      color: theme.palette.sidebarLink.main.color,
-      '& svg': {
-        color: theme.palette.sidebarLink.main.color,
-      },
-    },
-  },
-  linkMainNoVerticalPadding: {
-    '& .MuiListItem-root': {
-      paddingTop: '0',
-      paddingBottom: '0',
-    },
-  },
-  linkMainSelected: {
-    '& svg': {
-      color: theme.palette.sidebarLink.main.selected.color,
-    },
-    '&:hover, &:active': {
-      color: theme.palette.sidebarLink.main.selected.color,
-      '& svg': {
-        color: theme.palette.sidebarLink.main.selected.color,
-      },
-    },
-    '&, & *': {
-      color: theme.palette.sidebarLink.main.selected.color,
-    },
-    backgroundColor: `${theme.palette.sidebarLink.main.selected.backgroundColor}!important`,
-    '& .MuiListItemText-secondary': {
-      color: theme.palette.sidebarLink.main.selected.color,
-    },
-    '& a.Mui-focusVisible': {
-      backgroundColor: theme.palette.sidebarLink.selected.backgroundColor,
-    },
-  },
-  linkSelected: {
-    fontWeight: 'bold',
-    '& .Mui-selected': {
-      background: theme.palette.sidebarLink.selected.backgroundColor,
-      '& *': {
-        fontWeight: 'bold',
-        color: theme.palette.sidebarLink.selected.color,
-      },
-    },
-  },
-  nested: {
-    '& .MuiListItem-root': {
-      fontSize: '.875rem',
-      paddingTop: '2px',
-      paddingBottom: '2px',
-    },
-  },
-  linkSmallWidth: {
-    backgroundColor: 'inherit !important',
-  },
-  fullWidth: {
-    width: '100%',
-  },
-  fullWidthList: {
-    padding: 0,
-  },
-}));
+export function getFullURLOnRoute(
+  name: string,
+  isCR: boolean | undefined,
+  subList: Omit<SidebarItemProps, 'sidebar'>[]
+) {
+  let routeName = name;
+  if (isCR) {
+    if (name.startsWith('group-')) {
+      routeName = subList.length > 0 ? subList[0].name : '';
+    }
+    return createRouteURL('customresources', { crd: routeName });
+  } else {
+    if (!getRoute(name)) {
+      routeName = subList.length > 0 ? subList[0].name : '';
+    }
+    return createRouteURL(routeName);
+  }
+}
 
 /**
  * Adds onto SidebarEntryProps for the display of the sidebars.
  */
 export interface SidebarItemProps extends ListItemProps, SidebarEntry {
-  /** The route name which is selected. */
-  selectedName?: string | null;
+  /** Whether this item is selected. */
+  isSelected?: boolean;
   /** The navigation is a child. */
   hasParent?: boolean;
   /** Displayed wide with icon and text, otherwise with just a small icon. */
@@ -156,9 +65,11 @@ export interface SidebarItemProps extends ListItemProps, SidebarEntry {
   subList?: Omit<this, 'sidebar'>[];
   /** Whether to hide the sidebar item. */
   hide?: boolean;
+  level?: number;
+  isCR?: boolean;
 }
 
-export default function SidebarItem(props: SidebarItemProps) {
+const SidebarItemBase = memo((props: SidebarItemProps & { clusters?: string[] }) => {
   const {
     label,
     name,
@@ -167,96 +78,171 @@ export default function SidebarItem(props: SidebarItemProps) {
     search,
     useClusterURL = false,
     subList = [],
-    selectedName,
+    isSelected,
     hasParent = false,
+    level = 0,
     icon,
     fullWidth = true,
     hide,
+    tabIndex,
+    isCR,
+    entryType = 'link',
+    sx,
+    clusters = [],
     ...other
   } = props;
-  const classes = useItemStyle({ fullWidth, hasSubtitle: !!subtitle });
+
+  if (hide) {
+    return null;
+  }
+
+  if (entryType === 'subheader') {
+    const sidebarColor = (theme: Theme) =>
+      theme.palette.sidebar.color ??
+      theme.palette.getContrastText(theme.palette.sidebar.background);
+
+    if (!fullWidth) {
+      return (
+        <Divider
+          component="li"
+          sx={theme => ({
+            borderColor: alpha(sidebarColor(theme), 0.15),
+            listStyle: 'none',
+            margin: theme.spacing(1, 2),
+          })}
+        />
+      );
+    }
+
+    const subheaderSx: SxProps<Theme> = [
+      theme => ({
+        backgroundColor: 'transparent',
+        color: sidebarColor(theme),
+        fontSize: '0.75rem',
+        fontWeight: 700,
+        letterSpacing: '0.05em',
+        lineHeight: 1.5,
+        minHeight: 0,
+        overflow: 'hidden',
+        padding: theme.spacing(1.5, 2, 0.5),
+        textOverflow: 'ellipsis',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
+      }),
+      ...(sx ? (Array.isArray(sx) ? sx : [sx]) : []),
+    ];
+
+    return (
+      <React.Fragment>
+        <ListSubheader disableSticky sx={subheaderSx}>
+          {label}
+        </ListSubheader>
+        {subList.length > 0 && (
+          <ListItem
+            sx={{
+              display: 'block',
+              padding: 0,
+            }}
+          >
+            <List
+              component="ul"
+              disablePadding
+              sx={{
+                '&& .MuiListItemButton-root': {
+                  fontSize: '.875rem',
+                  paddingTop: '2px',
+                  paddingBottom: '2px',
+                },
+                '&& .MuiListItemText-primary': {
+                  fontSize: '.875rem',
+                },
+              }}
+            >
+              {subList.map((item: SidebarItemProps) => (
+                <SidebarItem
+                  key={item.name}
+                  isSelected={item.isSelected}
+                  fullWidth={fullWidth}
+                  search={search}
+                  tabIndex={tabIndex}
+                  {...item}
+                />
+              ))}
+            </List>
+          </ListItem>
+        )}
+      </React.Fragment>
+    );
+  }
+
   let fullURL = url;
-  if (fullURL && useClusterURL && getCluster()) {
-    fullURL = generatePath(getClusterPrefixedPath(url), { cluster: getCluster()! });
+  if (fullURL && useClusterURL && clusters.length && !fullURL.startsWith('http')) {
+    fullURL = generatePath(getClusterPrefixedPath(url), {
+      cluster: clusters.length ? formatClusterPathParam(clusters) : '',
+    });
   }
 
   if (!fullURL) {
-    let routeName = name;
-    if (!getRoute(name)) {
-      routeName = subList.length > 0 ? subList[0].name : '';
-    }
-    fullURL = createRouteURL(routeName);
+    fullURL = getFullURLOnRoute(name, isCR, subList);
   }
 
-  const isSelected = React.useMemo(() => {
-    if (name === selectedName) {
-      return true;
-    }
-
-    let subListToCheck = [...subList];
-    for (let i = 0; i < subListToCheck.length; i++) {
-      const subItem = subListToCheck[i];
-      if (subItem.name === selectedName) {
-        return true;
-      }
-
-      if (!!subItem.subList) {
-        subListToCheck = subListToCheck.concat(subItem.subList);
-      }
-    }
-    return false;
-  }, [subList, name, selectedName]);
-
-  function shouldExpand() {
-    return isSelected || !!subList.find(item => item.name === selectedName);
-  }
-
-  const expanded = subList.length > 0 && shouldExpand();
-  const listItemClasses = [classes.link];
-  if (!hasParent) {
-    listItemClasses.push(classes.linkMain);
-    if (isSelected) {
-      listItemClasses.push(classes.linkMainSelected);
-    }
-  } else {
-    if (isSelected) {
-      listItemClasses.push(classes.linkSelected);
-    }
-  }
-
-  return hide ? null : (
+  return (
     <React.Fragment>
       <ListItemLink
         selected={isSelected}
         pathname={fullURL || ''}
         primary={fullWidth ? label : ''}
-        containerProps={{
-          className: clsx(...listItemClasses),
-        }}
         icon={icon}
         name={label}
         subtitle={subtitle}
         search={search}
         iconOnly={!fullWidth}
+        tabIndex={tabIndex}
+        hasParent={hasParent}
+        level={level}
+        fullWidth={fullWidth}
         {...other}
       />
       {subList.length > 0 && (
-        <ListItem className={classes.fullWidthList}>
-          <Collapse in={fullWidth && expanded} className={classes.fullWidth}>
-            <List component="ul" disablePadding className={classes.nested}>
-              {subList.map((item: SidebarItemProps) => (
-                <SidebarItem
-                  key={item.name}
-                  selectedName={selectedName}
-                  hasParent
-                  search={search}
-                  {...item}
-                />
-              ))}
-            </List>
-          </Collapse>
-        </ListItem>
+        <Collapse component="li" in={fullWidth && isSelected} sx={{ width: '100%' }} unmountOnExit>
+          <List
+            component="ul"
+            disablePadding
+            sx={{
+              '& .MuiListItem-root': {
+                fontSize: '.875rem',
+                paddingTop: '2px',
+                paddingBottom: '2px',
+              },
+            }}
+          >
+            {subList.map((item: SidebarItemProps) => (
+              <SidebarItem
+                key={item.name}
+                isSelected={item.isSelected}
+                hasParent
+                level={level + 1}
+                search={search}
+                {...item}
+              />
+            ))}
+          </List>
+        </Collapse>
       )}
     </React.Fragment>
   );
-}
+});
+
+const SidebarItemWithCluster = memo((props: SidebarItemProps) => {
+  const clusters = useSelectedClusters();
+  return <SidebarItemBase {...props} clusters={clusters} />;
+});
+
+const SidebarItem = memo((props: SidebarItemProps) => {
+  if (props.useClusterURL) {
+    return <SidebarItemWithCluster {...props} />;
+  }
+  return <SidebarItemBase {...props} />;
+});
+
+export default SidebarItem;

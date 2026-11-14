@@ -1,51 +1,63 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
-import { DialogContentText } from '@mui/material';
 import Button from '@mui/material/Button';
 import Dialog, { DialogProps } from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 import Fab from '@mui/material/Fab';
 import Grid from '@mui/material/Grid';
-import IconButton from '@mui/material/IconButton';
-import MuiInput from '@mui/material/Input';
+import OutlinedInput from '@mui/material/OutlinedInput';
 import { styled, useTheme } from '@mui/material/styles';
-import Tooltip from '@mui/material/Tooltip';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch } from 'react-redux';
 import { useLocation } from 'react-router-dom';
-import { KubeObject } from '../../../lib/k8s/cluster';
+import Deployment from '../../../lib/k8s/deployment';
+import ReplicaSet from '../../../lib/k8s/replicaSet';
+import StatefulSet from '../../../lib/k8s/statefulSet';
 import { CallbackActionOptions, clusterAction } from '../../../redux/clusterActionSlice';
 import {
   EventStatus,
   HeadlampEventType,
   useEventCallback,
 } from '../../../redux/headlampEventSlice';
+import { AppDispatch } from '../../../redux/stores/store';
+import ActionButton, { ButtonStyle } from '../ActionButton';
 import { LightTooltip } from '../Tooltip';
 import AuthVisible from './AuthVisible';
 
 interface ScaleButtonProps {
-  item: KubeObject;
+  item: (Deployment | StatefulSet | ReplicaSet) & { _class?: () => { isScalable?: boolean } };
+  buttonStyle?: ButtonStyle;
   options?: CallbackActionOptions;
 }
 
 export default function ScaleButton(props: ScaleButtonProps) {
-  const dispatch = useDispatch();
-  const { item, options = {} } = props;
+  const dispatch: AppDispatch = useDispatch();
+
+  const { item, buttonStyle, options = {} } = props;
   const [openDialog, setOpenDialog] = React.useState(false);
   const location = useLocation();
   const { t } = useTranslation();
 
-  async function updateFunc(numReplicas: number) {
-    try {
-      await item.scale(numReplicas);
-    } catch (err) {
-      throw err;
-    }
-  }
-
-  const applyFunc = React.useCallback(updateFunc, [item]);
+  const applyFunc = React.useCallback((numReplicas: number) => item.scale(numReplicas), [item]);
 
   function handleSave(numReplicas: number) {
     const cancelUrl = location.pathname;
@@ -71,41 +83,40 @@ export default function ScaleButton(props: ScaleButtonProps) {
     setOpenDialog(false);
   }
 
-  if (!item || !['Deployment', 'StatefulSet', 'ReplicaSet'].includes(item.kind)) {
+  if (!item || !item?.isScalable) {
     return null;
   }
 
   return (
     <AuthVisible
       item={item}
-      authVerb="update"
+      authVerb="patch"
+      subresource="scale"
       onError={(err: Error) => {
         console.error(`Error while getting authorization for scaling button in ${item}:`, err);
       }}
     >
-      <Tooltip title={t('translation|Scale') as string}>
-        <IconButton
-          aria-label={t('translation|scale')}
-          onClick={() => {
-            setOpenDialog(true);
-          }}
-        >
-          <Icon icon="mdi:content-copy" />
-        </IconButton>
-      </Tooltip>
+      <ActionButton
+        description={t('translation|Scale')}
+        buttonStyle={buttonStyle}
+        onClick={() => {
+          setOpenDialog(true);
+        }}
+        icon="mdi:expand-all"
+      />
       <ScaleDialog resource={item} open={openDialog} onClose={handleClose} onSave={handleSave} />
     </AuthVisible>
   );
 }
 
-interface ScaleDialogProps extends DialogProps {
-  resource: KubeObject;
+interface ScaleDialogProps extends Omit<DialogProps, 'resource'> {
+  resource: Deployment | StatefulSet | ReplicaSet;
   onSave: (numReplicas: number) => void;
   onClose: () => void;
   errorMessage?: string;
 }
 
-const Input = styled(MuiInput)({
+const Input = styled(OutlinedInput)({
   '& input[type=number]': {
     MozAppearance: 'textfield',
     textAlign: 'center',
@@ -126,7 +137,7 @@ function ScaleDialog(props: ScaleDialogProps) {
   const dispatchHeadlampEvent = useEventCallback(HeadlampEventType.SCALE_RESOURCE);
 
   function getNumReplicas() {
-    if (!resource?.spec) {
+    if (!('spec' in resource)) {
       return -1;
     }
 
@@ -143,7 +154,7 @@ function ScaleDialog(props: ScaleDialogProps) {
           paddingBottom: '30px', // Prevent the content from overflowing
         }}
       >
-        <Grid container spacing={5}>
+        <Grid container spacing={2}>
           <Grid item xs={12}>
             <DialogContentText>
               {t('translation|Current number of replicas: {{ numReplicas }}', {
@@ -154,35 +165,40 @@ function ScaleDialog(props: ScaleDialogProps) {
           </Grid>
           <Grid item container alignItems="center" spacing={1}>
             <Grid item sm="auto" xs={12}>
-              <DialogContentText id={desiredNumReplicasLabel} sx={{ minWidth: '250px' }}>
+              <DialogContentText id={desiredNumReplicasLabel}>
                 {t('translation|Desired number of replicas:')}
               </DialogContentText>
             </Grid>
             <Grid item spacing={2} sm="auto" sx={{ padding: '6px', textAlign: 'left' }}>
               <Fab
                 size="small"
-                color="primary"
-                onClick={() => setNumReplicas(numReplicas => numReplicas - 1)}
+                color="secondary"
+                onClick={() => setNumReplicas(numReplicas => Math.max(0, numReplicas - 1))}
                 aria-label={t('translation|Decrement')}
+                disabled={numReplicas <= 0}
+                sx={{ boxShadow: 'none' }}
               >
                 <Icon icon="mdi:minus" width="22px" />
               </Fab>
               <Input
+                size="small"
                 type="number"
                 value={numReplicas}
                 sx={{ marginLeft: '6px', marginRight: '6px' }}
-                onChange={e => setNumReplicas(Number(e.target.value))}
+                onChange={e => setNumReplicas(Math.max(0, Number(e.target.value)))}
                 aria-labelledby={desiredNumReplicasLabel}
                 inputProps={{
                   min: 0,
                   step: 1,
                 }}
               />
+
               <Fab
                 size="small"
-                color="primary"
+                color="secondary"
                 onClick={() => setNumReplicas(numReplicas => numReplicas + 1)}
                 aria-label={t('translation|Increment')}
+                sx={{ boxShadow: 'none' }}
               >
                 <Icon icon="mdi:plus" width="22px" />
               </Fab>
@@ -202,7 +218,7 @@ function ScaleDialog(props: ScaleDialogProps) {
         </Grid>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} color="primary">
+        <Button onClick={onClose} color="secondary" variant="contained">
           {t('translation|Cancel')}
         </Button>
         <Button
@@ -213,6 +229,7 @@ function ScaleDialog(props: ScaleDialogProps) {
               status: EventStatus.CONFIRMED,
             });
           }}
+          variant="contained"
           color="primary"
         >
           {t('translation|Apply')}

@@ -1,34 +1,87 @@
 #!/usr/bin/env node
+
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // @ts-check
 'use strict';
 
-const webpack = require('webpack');
-const config = require('../config/webpack.config');
+const crypto = require('crypto');
 const fs = require('fs-extra');
-const FileManagerPlugin = require('filemanager-webpack-plugin');
 const envPaths = require('env-paths');
+const os = require('os');
 const path = require('path');
 const resolve = path.resolve;
 const child_process = require('child_process');
 const validate = require('validate-npm-package-name');
 const yargs = require('yargs/yargs');
 const headlampPluginPkg = require('../package.json');
+const { getNativeTypeScriptCommand, getUpgradeOverrides } = require('./typescript');
+const { PluginManager, MultiPluginManager } = require('@headlamp-k8s/pluginctl');
+const { table } = require('table');
+const tar = require('tar');
+
+// ES imports
+const viteCopyPluginPromise = import('vite-plugin-static-copy');
+const viteConfigPromise = import('../config/vite.config.mjs');
+const vitePromise = import('vite');
+
+// On Windows, npm-installed CLIs are `.cmd` shims that Node can't spawn directly.
+// We append this suffix when looking them up on disk.
+const binExt = process.platform === 'win32' ? '.cmd' : '';
+
+/**
+ * Adapt a `(file, args)` pair for spawning on the current platform.
+ *
+ * On Windows, `.cmd`/`.bat` shims can't be spawned directly by Node, so we route them
+ * through `cmd.exe /d /s /c`, as recommended by
+ * https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows.
+ * This avoids `shell: true`, which is deprecated with an `args` array (DEP0190).
+ *
+ * Spread the result into `spawnSync` / `execFileSync`:
+ *
+ *     child_process.execFileSync(...viaCmd('npm' + binExt, ['view', spec, '--json']), opts)
+ *
+ * @param {string} file
+ * @param {string[]} args
+ * @returns {[string, string[]]}
+ */
+function viaCmd(file, args) {
+  return process.platform === 'win32'
+    ? ['cmd.exe', ['/d', '/s', '/c', file, ...args]]
+    : [file, args];
+}
 
 /**
  * Creates a new plugin folder.
  *
  * Copies the files within template, and modifies a couple.
- * Then runs npm install inside of the folder.
+ * Then runs "npm ci" inside of the folder.
  *
  * @param {string} name - name of package and output folder.
  * @param {boolean} link - if we link @kinvolk/headlamp-plugin for testing
+ * @param {boolean} noInstall - if we skip installing with "npm ci"
  * @returns {0 | 1 | 2 | 3} Exit code, where 0 is success, 1, 2, and 3 are failures.
  */
-function create(name, link) {
+function create(name, link, noInstall) {
   const dstFolder = name;
   const templateFolder = path.resolve(__dirname, '..', 'template');
   const indexPath = path.join(dstFolder, 'src', 'index.tsx');
   const packagePath = path.join(dstFolder, 'package.json');
+  const packageLockPath = path.join(dstFolder, 'package-lock.json');
   const readmePath = path.join(dstFolder, 'README.md');
 
   if (fs.existsSync(name)) {
@@ -59,43 +112,99 @@ function create(name, link) {
         .join(name)
         .split('$${headlamp-plugin-version}')
         .join(headlampPluginPkg.version)
+        .split('$${eslint-config-version}')
+        .join(headlampPluginPkg.dependencies['@headlamp-k8s/eslint-config'])
     );
   }
 
   replaceFileVariables(packagePath);
+  replaceFileVariables(packageLockPath);
   replaceFileVariables(indexPath);
   replaceFileVariables(readmePath);
 
   // This can be used to make testing locally easier.
   if (link) {
     console.log('Linking @kinvolk/headlamp-plugin');
-    child_process.spawnSync('npm', ['link', '@kinvolk/headlamp-plugin'], {
+    child_process.spawnSync(...viaCmd('npm' + binExt, ['link', '@kinvolk/headlamp-plugin']), {
       cwd: dstFolder,
     });
   }
 
-  console.log('Installing dependencies...');
-  // Run npm install.
-  try {
-    child_process.execSync('npm install', {
-      stdio: 'inherit',
-      cwd: dstFolder,
-      encoding: 'utf8',
-    });
-  } catch (e) {
-    console.error(
-      `Problem running npm install inside of "${dstFolder}" abs: "${resolve(dstFolder)}"`
-    );
-    return 3;
-  }
+  if (noInstall) {
+    console.log('Skipping dependency installation...');
+  } else {
+    console.log('Installing...');
 
-  // This can be used to make testing locally easier.
-  if (link) {
-    // Seems to require linking again with npm 7+
-    console.log('Linking @kinvolk/headlamp-plugin');
-    child_process.spawnSync('npm', ['link', '@kinvolk/headlamp-plugin'], {
-      cwd: dstFolder,
-    });
+    // In the package-lock.json we try to update the integrity field of the
+    // @kinvolk/headlamp-plugin package to match the integrity field on npmjs
+    // registry for this version. If that fails (e.g. version not published yet),
+    // we fall back to running `npm install` instead of `npm ci` and skip the update.
+    let useNpmCi = false;
+    try {
+      const npmJsPkgResponse = child_process.execFileSync(
+        ...viaCmd('npm' + binExt, [
+          'view',
+          `@kinvolk/headlamp-plugin@${headlampPluginPkg.version}`,
+          'dist',
+          '--json',
+        ]),
+        { encoding: 'utf8' }
+      );
+      const npmJsPkg = JSON.parse(npmJsPkgResponse);
+      const npmJsIntegrity = npmJsPkg.integrity;
+
+      // Now set integrity in the package-lock.json to match npmjs registry integrity.
+      // The template has none for @kinvolk/headlamp-plugin, since it's made from a
+      // local "npm pack" whose integrity never matches the published package.
+      // "node_modules/@kinvolk/headlamp-plugin": {
+      //   "version": "0.13.0-alpha.13",
+      //   "resolved": "...",
+      //   "integrity": "sha512-..."
+      const packageLock = JSON.parse(fs.readFileSync(packageLockPath, 'utf8'));
+      const headlampPluginLock = packageLock.packages?.['node_modules/@kinvolk/headlamp-plugin'];
+      if (headlampPluginLock && headlampPluginLock.integrity !== npmJsIntegrity) {
+        headlampPluginLock.integrity = npmJsIntegrity;
+        fs.writeFileSync(packageLockPath, JSON.stringify(packageLock, null, 2) + '\n');
+      }
+
+      useNpmCi = true;
+    } catch (e) {
+      // no warning, we just fall back to npm install
+    }
+
+    try {
+      if (useNpmCi) {
+        console.log('Running npm ci...');
+        child_process.execSync('npm ci', {
+          stdio: 'inherit',
+          cwd: dstFolder,
+          encoding: 'utf8',
+        });
+      } else {
+        console.log('Running npm install...');
+        child_process.execSync('npm install', {
+          stdio: 'inherit',
+          cwd: dstFolder,
+          encoding: 'utf8',
+        });
+      }
+    } catch (e) {
+      console.error(
+        `Problem running ${
+          useNpmCi ? 'npm ci' : 'npm install'
+        } inside of "${dstFolder}" abs: "${resolve(dstFolder)}"`
+      );
+      return 3;
+    }
+
+    // This can be used to make testing locally easier.
+    if (link) {
+      // Seems to require linking again with npm 7+
+      console.log('Linking @kinvolk/headlamp-plugin');
+      child_process.spawnSync(...viaCmd('npm' + binExt, ['link', '@kinvolk/headlamp-plugin']), {
+        cwd: dstFolder,
+      });
+    }
   }
 
   console.log(`"${dstFolder}" created.`);
@@ -109,68 +218,25 @@ function create(name, link) {
 }
 
 /**
- * Compile callback for webpack to show any warnings + errors.
- */
-function compileMessages(err, stats) {
-  if (err && err.message) {
-    console.log(err);
-    // This should be a failure.
-    return 1;
-  }
-  if (stats && stats.compilation) {
-    const printList = {
-      Warnings: stats.compilation.warnings,
-      Errors: stats.compilation.errors,
-    };
-
-    Object.entries(printList).forEach(([key, value]) => {
-      if (value.length === 0) {
-        return;
-      }
-
-      console.log(`${key}:\n`);
-      for (const item of value) {
-        console.log(item);
-        console.log('\n');
-      }
-    });
-
-    if (stats.hasErrors()) {
-      // This should be a failure.
-      return 1;
-    }
-  }
-
-  return 0;
-}
-
-/**
  * extract copies folders of packages in the form:
  *   packageName/dist/main.js to packageName/main.js
  *   packageName/package.json to packageName/package.json
  *
  * @param {string} pluginPackagesPath - can be a package or a folder of packages.
  * @param {string} outputPlugins - folder where the plugins are placed.
+ * @param {boolean} logSteps - whether to print the steps of the extraction (true by default).
  * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
  */
-function extract(pluginPackagesPath, outputPlugins) {
+function extract(pluginPackagesPath, outputPlugins, logSteps = true) {
   if (!fs.existsSync(pluginPackagesPath)) {
     console.error(`"${pluginPackagesPath}" does not exist. Not extracting.`);
     return 1;
   }
   if (!fs.existsSync(outputPlugins)) {
-    console.log(`"${outputPlugins}" did not exist, making folder.`);
-    fs.mkdirSync(outputPlugins);
-  }
-
-  function copyFiles(plugName, inputMainJs, mainjs) {
-    if (!fs.existsSync(plugName)) {
-      console.log(`Making output folder "${plugName}".`);
-      fs.mkdirSync(plugName);
+    if (logSteps) {
+      console.log(`"${outputPlugins}" did not exist, making folder.`);
     }
-
-    console.log(`Copying "${inputMainJs}" to "${mainjs}".`);
-    fs.copyFileSync(inputMainJs, mainjs);
+    fs.mkdirSync(outputPlugins);
   }
 
   /**
@@ -178,6 +244,7 @@ function extract(pluginPackagesPath, outputPlugins) {
    */
   function extractPackage() {
     if (fs.existsSync(path.join(pluginPackagesPath, 'dist', 'main.js'))) {
+      const distPath = path.join(pluginPackagesPath, 'dist');
       const trimmedPath =
         pluginPackagesPath.slice(-1) === path.sep
           ? pluginPackagesPath.slice(0, -1)
@@ -185,9 +252,19 @@ function extract(pluginPackagesPath, outputPlugins) {
       const folderName = trimmedPath.split(path.sep).splice(-1)[0];
       const plugName = path.join(outputPlugins, folderName);
 
-      const inputMainJs = path.join(pluginPackagesPath, 'dist', 'main.js');
-      const outputMainjs = path.join(plugName, 'main.js');
-      copyFiles(plugName, inputMainJs, outputMainjs);
+      fs.ensureDirSync(plugName);
+
+      const files = fs.readdirSync(distPath);
+      files.forEach(file => {
+        const srcFile = path.join(distPath, file);
+        const destFile = path.join(plugName, file);
+        console.log(`Copying "${srcFile}" to "${destFile}".`);
+        if (fs.statSync(srcFile).isDirectory()) {
+          fs.copySync(srcFile, destFile);
+        } else {
+          fs.copyFileSync(srcFile, destFile);
+        }
+      });
 
       const inputPackageJson = path.join(pluginPackagesPath, 'package.json');
       const outputPackageJson = path.join(plugName, 'package.json');
@@ -208,11 +285,22 @@ function extract(pluginPackagesPath, outputPlugins) {
     });
 
     folders.forEach(folder => {
+      const distPath = path.join(pluginPackagesPath, folder.name, 'dist');
       const plugName = path.join(outputPlugins, folder.name);
 
-      const inputMainJs = path.join(pluginPackagesPath, folder.name, 'dist', 'main.js');
-      const outputMainjs = path.join(plugName, 'main.js');
-      copyFiles(plugName, inputMainJs, outputMainjs);
+      fs.ensureDirSync(plugName);
+
+      const files = fs.readdirSync(distPath);
+      files.forEach(file => {
+        const srcFile = path.join(distPath, file);
+        const destFile = path.join(plugName, file);
+        console.log(`Copying "${srcFile}" to "${destFile}".`);
+        if (fs.statSync(srcFile).isDirectory()) {
+          fs.copySync(srcFile, destFile);
+        } else {
+          fs.copyFileSync(srcFile, destFile);
+        }
+      });
 
       const inputPackageJson = path.join(pluginPackagesPath, folder.name, 'package.json');
       const outputPackageJson = path.join(plugName, 'package.json');
@@ -224,22 +312,220 @@ function extract(pluginPackagesPath, outputPlugins) {
 
   if (!(extractPackage() || extractFolderOfPackages())) {
     console.error(`"${pluginPackagesPath}" does not contain packages. Not extracting.`);
+    return 1;
   }
 
   return 0;
 }
 
 /**
- * Start watching for changes, and build again if there are changes.
- * @returns {0} Exit code, where 0 is success.
+ * Calculate the checksum of a file.
+ *
+ * @param {*} filePath
+ * @returns
  */
-function start() {
+async function calculateChecksum(filePath) {
+  try {
+    const fileBuffer = await fs.readFile(filePath);
+    const hashSum = crypto.createHash('sha256');
+    hashSum.update(fileBuffer);
+    const hex = hashSum.digest('hex');
+    return hex;
+  } catch (error) {
+    console.error('Error calculating checksum:', error);
+    throw error; // Rethrow the error if you want to handle it further up the call stack
+  }
+}
+
+/**
+ * Copy extra files specified in package.json to the dist folder
+ *
+ * @param {string} [packagePath='.'] - Path to the package root containing package.json
+ * @returns {Promise<void>}
+ */
+async function copyExtraDistFiles(packagePath = '.') {
+  try {
+    const packageJsonPath = path.join(packagePath, 'package.json');
+    if (!fs.existsSync(packageJsonPath)) {
+      return; // No package.json, nothing to do
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    const distFolder = path.resolve(packagePath, 'dist');
+
+    // Create dist folder if it doesn't exist (although it should by this point)
+    if (!fs.existsSync(distFolder)) {
+      fs.mkdirSync(distFolder, { recursive: true });
+    }
+
+    // Auto-detect and copy locales folder if it exists (for i18n support)
+    const localesPath = path.resolve(packagePath, 'locales');
+    if (fs.existsSync(localesPath)) {
+      const targetLocalesPath = path.join(distFolder, 'locales');
+      console.log(`Auto-copying locales directory "${localesPath}" to "${targetLocalesPath}"`);
+      fs.copySync(localesPath, targetLocalesPath);
+    }
+
+    // Process manual extraDist configuration if it exists
+    if (packageJson.headlamp && packageJson.headlamp.extraDist) {
+      const extraDist = packageJson.headlamp.extraDist;
+
+      // Process all entries in extraDist
+      for (const [target, source] of Object.entries(extraDist)) {
+        const targetPath = path.join(distFolder, target);
+        const sourcePath = path.resolve(packagePath, source);
+
+        // Skip if source doesn't exist
+        if (!fs.existsSync(sourcePath)) {
+          console.warn(`Warning: extraDist source "${sourcePath}" does not exist, skipping.`);
+          continue;
+        }
+
+        // Skip if this is locales and we already auto-copied it
+        if (target === 'locales' && fs.existsSync(path.join(distFolder, 'locales'))) {
+          console.log(`Skipping manual locales copy - already auto-copied`);
+          continue;
+        }
+
+        // Create target directory if needed
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+        // Copy based on whether it's a directory or file
+        const sourceStats = fs.statSync(sourcePath);
+        if (sourceStats.isDirectory()) {
+          console.log(`Copying extra directory "${sourcePath}" to "${targetPath}"`);
+          fs.copySync(sourcePath, targetPath);
+        } else {
+          console.log(`Copying extra file "${sourcePath}" to "${targetPath}"`);
+          fs.copyFileSync(sourcePath, targetPath);
+        }
+      }
+    }
+
+    console.log('Successfully copied extra dist files');
+  } catch (error) {
+    console.error('Error copying extra dist files:', error);
+  }
+}
+
+/**
+ * Creates a tarball of the plugin package. The tarball is placed in the outputFolderPath.
+ * It moves files from:
+ *   packageName/dist/main.js to packageName/main.js
+ *   packageName/package.json to packageName/package.json
+ * And then creates a tarball of the resulting folder.
+ *
+ * @param {string} pluginDir - path to the plugin package.
+ * @param {string} outputDir - folder where the tarball is placed.
+ *
+ * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
+ */
+async function createArchive(pluginDir, outputDir) {
+  const pluginPath = path.resolve(pluginDir);
+  if (!fs.existsSync(pluginPath)) {
+    console.error(`Error: "${pluginPath}" does not exist. Not creating archive.`);
+    return 1;
+  }
+
+  // Extract name + version from plugin's package.json
+  const packageJsonPath = path.join(pluginPath, 'package.json');
+  let packageJson = '';
+  try {
+    packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  } catch (e) {
+    console.error(`Error: Failed to read package.json from "${pluginPath}". Not creating archive.`);
+    return 1;
+  }
+
+  const sanitizedName = packageJson.name.replace(/@/g, '').replace(/\//g, '-');
+  const tarballName = `${sanitizedName}-${packageJson.version}.tar.gz`;
+
+  const outputFolderPath = path.resolve(outputDir);
+  const tarballPath = path.join(outputFolderPath, tarballName);
+
+  if (!fs.existsSync(outputFolderPath)) {
+    console.log(`"${outputFolderPath}" did not exist, making folder.`);
+    fs.mkdirSync(outputFolderPath, { recursive: true });
+  } else if (fs.existsSync(tarballPath)) {
+    console.error(`Error: Tarball "${tarballPath}" already exists. Not creating archive.`);
+    return 1;
+  }
+
+  // Create temporary folder
+  const tempFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'headlamp-plugin-'));
+
+  // Make sure any extraDist files are in the dist folder before extraction
+  await copyExtraDistFiles(pluginPath);
+
+  if (extract(pluginPath, tempFolder, false) !== 0) {
+    console.error(
+      `Error: Failed to extract plugin package to "${tempFolder}". Not creating archive.`
+    );
+    return 1;
+  }
+
+  const folderName = path.basename(pluginPath);
+
+  // Create tarball
+  await tar.c(
+    {
+      gzip: true,
+      file: tarballPath,
+      cwd: tempFolder,
+    },
+    [folderName]
+  );
+
+  // Remove temporary folder
+  fs.rmSync(tempFolder, { recursive: true });
+
+  console.log(`Created tarball: "${tarballPath}".`);
+
+  // Print sha256 checksum for convenience
+  const checksum = await calculateChecksum(tarballPath);
+  console.log(`Tarball checksum (sha256): ${checksum}`);
+
+  return 0;
+}
+
+/**
+ * Inject selected environment variables into Vite config's define field.
+ * Supports both import.meta.env and process.env styles.
+ *
+ * @param {object} config - Vite config object to mutate
+ * @param {string[]} extraKeys - Additional Node-style keys to expose
+ */
+function injectEnvVars(config, extraKeys = ['NODE_ENV']) {
+  if (!config.define) {
+    config.define = {};
+  }
+
+  Object.keys(process.env)
+    .filter(
+      key =>
+        key.startsWith('REACT_APP_') || key.startsWith('HEADLAMP_APP_') || extraKeys.includes(key)
+    )
+    .forEach(key => {
+      const value = JSON.stringify(process.env[key]);
+      console.log(`Injecting env var: ${key} = ${value}`);
+      config.define[`import.meta.env.${key}`] = value;
+      config.define[`process.env.${key}`] = value;
+    });
+
+  return config;
+}
+
+/**
+ * Start watching for changes, and build again if there are changes.
+ * @returns {Promise<number>} Exit code, where 0 is success.
+ */
+async function start() {
   /**
    * Copies the built plugin to the app config folder ~/.config/Headlamp/plugins/
    *
    * Adds a webpack config plugin for copying the folder.
    */
-  function copyToPluginsFolder(webpackConfig) {
+  async function copyToPluginsFolder(viteConfig) {
     const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 
     // @todo: should the whole package name be used here,
@@ -248,63 +534,131 @@ function start() {
     const paths = envPaths('Headlamp', { suffix: '' });
     const configDir = fs.existsSync(paths.data) ? paths.data : paths.config;
 
-    webpackConfig.plugins = [
-      new FileManagerPlugin({
-        events: {
-          onEnd: {
-            copy: [
-              {
-                source: './dist/*',
-                destination: path.join(configDir, 'plugins', packageName),
-              },
-              {
-                source: './package.json',
-                destination: path.join(configDir, 'plugins', packageName, 'package.json'),
-              },
-            ],
+    const { viteStaticCopy } = await viteCopyPluginPromise;
+
+    viteConfig.plugins.push(
+      viteStaticCopy({
+        targets: [
+          {
+            src: './dist/*',
+            dest: path.join(configDir, 'plugins', packageName),
           },
-        },
-      }),
-    ];
+          {
+            src: './package.json',
+            dest: path.join(configDir, 'plugins', packageName),
+          },
+        ],
+      })
+    );
+
+    viteConfig.plugins.push({
+      name: 'headlamp-log-files-copied-to-plugin-folder',
+      buildEnd: async () => {
+        const destDir = path.join(configDir, 'plugins', packageName);
+        if (!fs.existsSync(destDir)) {
+          console.log(`No files copied to "${destDir}" (directory does not exist).`);
+          return;
+        }
+        try {
+          const files = fs.readdirSync(destDir);
+          if (files.length === 0) {
+            console.log(`No files found in "${destDir}".`);
+            return;
+          }
+          files.forEach(file => {
+            const destPath = path.join(destDir, file);
+            const srcPath =
+              file === 'package.json' ? path.resolve('package.json') : path.resolve('dist', file);
+            console.log(`Copied "${srcPath}" -> "${destPath}"`);
+          });
+        } catch (err) {
+          console.error('Error logging copied files:', err);
+        }
+      },
+    });
   }
 
   /**
    * Inform if @kinvolk/headlamp-plugin is outdated.
    */
-  function informIfOutdated() {
-    console.log('Checking if headlamp-plugin is up to date...');
-    const outdated = getNpmOutdated();
-    if ('@kinvolk/headlamp-plugin' in outdated) {
-      const url = `https://github.com/kinvolk/headlamp/releases`;
-      console.warn(
-        '    @kinvolk/headlamp-plugin is out of date. Run the following command to upgrade \n' +
-          `    See release notes here: ${url}` +
-          '    npx @kinvolk/headlamp-plugin upgrade'
-      );
-    } else {
-      console.log('    @kinvolk/headlamp-plugin is up to date.');
-    }
+  async function informIfOutdated() {
+    console.log('Checking if @kinvolk/headlamp-plugin is up to date...');
+    child_process.exec('npm outdated --json', (error, stdout) => {
+      if (error) {
+        // npm outdated exit codes 1 when something is not up to date.
+        const result = stdout.toString();
+        const outdated = JSON.parse(result);
+        if ('@kinvolk/headlamp-plugin' in outdated) {
+          const url = `https://github.com/kubernetes-sigs/headlamp/releases`;
+          console.warn(
+            '    @kinvolk/headlamp-plugin is out of date. Run the following command to upgrade \n' +
+              `    See release notes here: ${url}` +
+              '    npx @kinvolk/headlamp-plugin upgrade'
+          );
+          return;
+        }
+      }
+    });
   }
 
-  informIfOutdated();
+  setTimeout(() => {
+    informIfOutdated().catch(error => {
+      console.error('Error checking if @kinvolk/headlamp-plugin is up to date:', error);
+    });
+  }, 500);
 
-  config.watch = true;
-  config.mode = 'development';
-  process.env['BABEL_ENV'] = 'development';
-  copyToPluginsFolder(config);
-  let exitCode = 0;
-  webpack(config, (err, stats) => {
-    // We are checking the exit code of the compileMessages function.
-    // It should be 0 if there are no errors, and 1 if there are errors.
-    exitCode = compileMessages(err, stats);
-    if (exitCode !== 0) {
-      console.error('Failed to start watching for changes.');
-    } else {
-      console.log('Watching for changes to plugin...');
-    }
-  });
+  // Read package.json to get plugin name for dev mode
+  const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const pluginName = packageJson.name || path.basename(process.cwd());
 
-  return exitCode;
+  console.warn(
+    'Headlamp Desktop: enable Plugin Development Mode in Settings > Plugins ' +
+      'to load this plugin in a packaged app.'
+  );
+
+  const config = (await viteConfigPromise).default;
+  const vite = await vitePromise;
+
+  if (config.build) {
+    config.build.watch = {};
+    config.build.sourcemap = 'inline';
+  }
+
+  if (typeof process.env.NODE_ENV === 'undefined') {
+    process.env.NODE_ENV = 'development';
+  }
+  injectEnvVars(config);
+
+  // Add plugin name injection plugin for dev mode
+  if (!config.plugins) {
+    config.plugins = [];
+  }
+
+  const { pluginNameInjection } = await import('../config/vite-plugin-name-injection.mjs');
+  config.plugins.push(pluginNameInjection({ pluginName }));
+
+  // Add file copy hook to be executed after each build
+  if (config.plugins) {
+    config.plugins.push({
+      name: 'headlamp-copy-extra-dist',
+      buildEnd: async () => {
+        await copyExtraDistFiles();
+      },
+    });
+  }
+
+  // Then add the plugins from copyToPluginsFolder which includes ViteStaticCopy
+  await copyToPluginsFolder(config);
+
+  try {
+    await vite.build(config);
+  } catch (e) {
+    console.error(e);
+    console.error('Failed to start watching for changes.');
+    return 1;
+  }
+
+  return 0;
 }
 
 /**
@@ -314,9 +668,10 @@ function start() {
  * @param scriptName {string} - name of the script to run.
  * @param cmdLine {string} - command line to run.
  * @param env {object} - environment variables to run the command with.
+ * @param {(projectDirectory: string) => { file: string, args: string[] } | undefined} [resolveCommand]
  * @returns {0 | 1} - Exit code, where 0 is success, 1 is failure.
  */
-function runScriptOnPackages(packageFolder, scriptName, cmdLine, env) {
+function runScriptOnPackages(packageFolder, scriptName, cmdLine, env, resolveCommand) {
   if (!fs.existsSync(packageFolder)) {
     console.error(`"${packageFolder}" does not exist. Not ${scriptName}-ing.`);
     return 1;
@@ -353,53 +708,62 @@ function runScriptOnPackages(packageFolder, scriptName, cmdLine, env) {
       console.log(`Finished npm install.`);
     }
 
-    // See if the cmd is in the:
-    // - package/node_modules/.bin
-    // - package/../node_modules/.bin
-    // - the npx node_modules/.bin
-    // If not, just use the original cmdLine and hope for the best :)
-    let cmdLineToUse = cmdLine;
-    const scriptCmd = cmdLine.split(' ')[0];
-    const scriptCmdRest = cmdLine.split(' ').slice(1).join(' ');
-
-    const nodeModulesBinCmd = path.join('node_modules', '.bin', scriptCmd);
-    const upNodeModulesBinCmd = path.join('../', nodeModulesBinCmd);
-
-    // When run as npx, find it in the node_modules npx uses
-    const headlampPluginBin = fs.realpathSync(process.argv[1]);
-    const npxBinCmd = path.join(
-      path.dirname(headlampPluginBin),
-      '..',
-      '..',
-      '..',
-      '..',
-      nodeModulesBinCmd
-    );
-
-    if (fs.existsSync(nodeModulesBinCmd)) {
-      cmdLineToUse = nodeModulesBinCmd + ' ' + scriptCmdRest;
-    } else if (fs.existsSync(upNodeModulesBinCmd)) {
-      cmdLineToUse = upNodeModulesBinCmd + ' ' + scriptCmdRest;
-    } else if (fs.existsSync(npxBinCmd)) {
-      cmdLineToUse = npxBinCmd + ' ' + scriptCmdRest;
-    } else {
-      console.warn(
-        `"${scriptCmd}" not found in "${resolve(nodeModulesBinCmd)}" or "${resolve(
-          upNodeModulesBinCmd
-        )}" or "${resolve(npxBinCmd)}".`
-      );
-    }
-
-    console.log(`"${folder}": ${scriptName}-ing, :${cmdLineToUse}:...`);
-
     try {
-      child_process.execSync(cmdLineToUse, {
+      const command = resolveCommand?.(process.cwd());
+      /** @type {[string, string[]]} */
+      let execution;
+      if (command) {
+        execution = [command.file, command.args];
+      } else {
+        // See if the cmd is in the:
+        // - package/node_modules/.bin
+        // - package/../node_modules/.bin
+        // - the npx node_modules/.bin
+        // If not, just use the original cmdLine and hope for the best :)
+        let cmdLineToUse = cmdLine;
+        const scriptCmd = cmdLine.split(' ')[0];
+        const scriptCmdRest = cmdLine.split(' ').slice(1).join(' ');
+
+        const nodeModulesBinCmd = path.join('node_modules', '.bin', scriptCmd + binExt);
+        const upNodeModulesBinCmd = path.join('../', nodeModulesBinCmd);
+
+        // When run as npx, find it in the node_modules npx uses
+        const headlampPluginBin = fs.realpathSync(process.argv[1]);
+        const npxBinCmd = path.join(
+          path.dirname(headlampPluginBin),
+          '..',
+          '..',
+          '..',
+          '..',
+          nodeModulesBinCmd
+        );
+
+        if (fs.existsSync(nodeModulesBinCmd)) {
+          cmdLineToUse = nodeModulesBinCmd + ' ' + scriptCmdRest;
+        } else if (fs.existsSync(upNodeModulesBinCmd)) {
+          cmdLineToUse = upNodeModulesBinCmd + ' ' + scriptCmdRest;
+        } else if (fs.existsSync(npxBinCmd)) {
+          cmdLineToUse = npxBinCmd + ' ' + scriptCmdRest;
+        } else {
+          console.warn(
+            `"${scriptCmd}" not found in "${resolve(nodeModulesBinCmd)}" or "${resolve(
+              upNodeModulesBinCmd
+            )}" or "${resolve(npxBinCmd)}".`
+          );
+        }
+
+        const [cmd, ...args] = cmdLineToUse.split(' ');
+        execution = viaCmd(cmd, args);
+      }
+
+      console.log(`"${folder}": ${scriptName}-ing, :${execution[0]} ${execution[1].join(' ')}:...`);
+      child_process.execFileSync(...execution, {
         stdio: 'inherit',
         encoding: 'utf8',
         env: { ...process.env, ...(env || {}) },
       });
     } catch (e) {
-      console.error(`Problem running ${scriptName} inside of "${folder}"\r\n`);
+      console.error(`Problem running ${scriptName} inside of "${folder}"\r\n`, e.message);
       process.chdir(oldCwd);
       return runOnPackageReturn.issue;
     }
@@ -447,9 +811,9 @@ function runScriptOnPackages(packageFolder, scriptName, cmdLine, env) {
     };
   }
 
-  const err = runOnPackage(packageFolder);
+  const exitCode = runOnPackage(packageFolder);
 
-  if (err === runOnPackageReturn.notThere) {
+  if (exitCode === runOnPackageReturn.notThere) {
     const folderErr = runOnFolderOfPackages(packageFolder);
     if (folderErr.error === runOnPackageReturn.notThere) {
       console.error(
@@ -464,45 +828,168 @@ function runScriptOnPackages(packageFolder, scriptName, cmdLine, env) {
       );
       return 1; // failed
     }
+    return 0;
   }
 
-  return 0; // success
+  return exitCode > 0 ? 1 : 0;
+}
+
+/**
+ * Brotli-compress all compressible files in a directory, writing <file>.br
+ * sidecars alongside each asset. Stale sidecars for ineligible files are
+ * removed so the server cannot serve mismatched bytes on incremental builds.
+ * Uses only Node.js built-ins (no extra dependencies).
+ *
+ * @param {string} dir - directory to walk (typically the plugin dist/ folder)
+ */
+async function brotliCompressDist(dir) {
+  const zlib = require('zlib');
+  const COMPRESSIBLE = new Set([
+    '.js',
+    '.mjs',
+    '.cjs',
+    '.css',
+    '.json',
+    '.map',
+    '.svg',
+    '.txt',
+    '.xml',
+    '.wasm',
+  ]);
+
+  function* walk(d) {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) yield* walk(full);
+      else if (entry.isFile()) yield full;
+    }
+  }
+
+  if (!fs.existsSync(dir)) return;
+
+  for (const file of walk(dir)) {
+    if (file.endsWith('.br')) {
+      const original = file.slice(0, -3);
+      if (!fs.existsSync(original)) {
+        // Remove orphan sidecar so stale bytes are never served.
+        try {
+          fs.unlinkSync(file);
+        } catch (e) {
+          if (e.code !== 'ENOENT') throw e;
+        }
+      }
+      continue;
+    }
+
+    if (file.endsWith('.gz')) continue;
+
+    const sidecar = file + '.br';
+    const ext = path.extname(file).toLowerCase();
+
+    if (!COMPRESSIBLE.has(ext)) {
+      // Remove any stale sidecar so the server cannot serve mismatched bytes.
+      try {
+        fs.unlinkSync(sidecar);
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+      continue;
+    }
+
+    const data = fs.readFileSync(file);
+    const br = zlib.brotliCompressSync(data, {
+      params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: data.length,
+      },
+    });
+
+    // Keep sidecars only when beneficial, except for dist/main.js.
+    //
+    // We always emit main.js.br so plugin bundles have a predictable
+    // precompressed entrypoint: backend/plugin loading paths and CI packaging
+    // checks expect this sidecar to exist even for very small bundles where
+    // brotli might not reduce size.
+    const shouldKeep = br.length < data.length || path.basename(file) === 'main.js';
+
+    if (shouldKeep) {
+      fs.writeFileSync(sidecar, br);
+    } else {
+      try {
+        fs.unlinkSync(sidecar);
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+    }
+  }
 }
 
 /**
  * Build the plugin package or folder of packages for production.
  *
  * @param packageFolder {string} - folder where the package, or folder of packages is.
- * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
+ * @returns {Promise<0 | 1>} Exit code, where 0 is success, 1 is failure.
  */
-function build(packageFolder) {
+async function build(packageFolder) {
   if (!fs.existsSync(packageFolder)) {
     console.error(`"${packageFolder}" does not exist. Not building.`);
     return 1;
   }
 
   const oldCwd = process.cwd();
-  const oldBabelEnv = process.env['BABEL_ENV'];
-  process.env['BABEL_ENV'] = 'production';
 
-  function buildPackage(folder) {
+  async function buildPackage(folder) {
     if (!fs.existsSync(path.join(folder, 'package.json'))) {
       return false;
     }
 
+    const distDir = path.resolve(folder, 'dist');
+
     process.chdir(folder);
-    console.log(`Building "${folder}" for production...`);
-    webpack(config, (err, stats) => {
-      // We are checking the exit code of the compileMessages function.
-      // It should be 0 if there are no errors, and 1 if there are errors.
-      const exitCode = compileMessages(err, stats);
-      if (exitCode !== 0) {
-        console.error(`Failed to build "${folder}" for production.`);
-      } else {
-        console.log(`Finished building "${folder}" for production.`);
-      }
-      process.exit(exitCode);
-    });
+
+    // Read package.json to get plugin name
+    const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+    const pluginName = packageJson.name || path.basename(folder);
+
+    console.log(`Building "${folder}" for production with plugin name: ${pluginName}...`);
+
+    const config = await viteConfigPromise;
+    const vite = await vitePromise;
+
+    // Clone the config and add plugin name injection
+    const buildConfig = { ...config.default };
+
+    // Add plugin name injection to the plugins array
+    if (!buildConfig.plugins) {
+      buildConfig.plugins = [];
+    }
+
+    if (typeof process.env.NODE_ENV === 'undefined') {
+      process.env.NODE_ENV = 'production';
+    }
+    injectEnvVars(buildConfig);
+
+    // Import the plugin name injection plugin
+    const { pluginNameInjection } = await import('../config/vite-plugin-name-injection.mjs');
+    buildConfig.plugins.push(pluginNameInjection({ pluginName }));
+
+    try {
+      await vite.build(buildConfig);
+
+      // Copy extra dist files after successful build
+      await copyExtraDistFiles('.');
+
+      // Brotli-compress all compressible files in dist/ so the Headlamp backend
+      // can serve .br sidecars without on-the-fly compression.
+      await brotliCompressDist(distDir);
+
+      console.log(`Finished building "${folder}" for production.`);
+    } catch (e) {
+      console.error(e);
+      console.error(`Failed to build "${folder}" for production.`);
+      process.exit(1);
+    }
+
     process.chdir(oldCwd);
     return true;
   }
@@ -527,8 +1014,6 @@ function build(packageFolder) {
   if (!(buildPackage(packageFolder) || buildFolderOfPackages())) {
     console.error(`"${packageFolder}" does not contain a package or packages. Not building.`);
   }
-
-  process.env['BABEL_ENV'] = oldBabelEnv;
 
   return 0;
 }
@@ -612,6 +1097,7 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
       path.join('.vscode', 'settings.json'),
       path.join('.vscode', 'tasks.json'),
       'tsconfig.json',
+      'AGENTS.md',
     ];
     const templateFolder = path.resolve(__dirname, '..', 'template');
 
@@ -627,9 +1113,14 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
         fs.copyFileSync(from, to);
       }
       // Add file if it is different
-      if (fs.readFileSync(from, 'utf8') !== fs.readFileSync(to, 'utf8')) {
-        console.log(`Updating file: "${to}"`);
-        fs.copyFileSync(from, to);
+      if (fs.existsSync(to)) {
+        const fromContent = fs.readFileSync(from, 'utf8');
+        const toContent = fs.readFileSync(to, 'utf8');
+
+        if (fromContent !== toContent) {
+          console.log(`Updating file: "${to}"`);
+          fs.writeFileSync(to, fromContent);
+        }
       }
     });
   }
@@ -646,7 +1137,7 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
       .map(dirent => path.join('src', dirent.name))
       .filter(path => fs.readFileSync(path, 'utf8').includes('@material-ui'));
 
-    if (hasMaterialUI) {
+    if (hasMaterialUI.length > 0) {
       console.log('Found files with "@material-ui". Upgrading material-ui v4 to mui v5...');
       const cmd = 'npx @mui/codemod v5.0.0/preset-safe src';
       if (runCmd(cmd, '.')) {
@@ -710,10 +1201,12 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
     }
 
     // Update these scripts keys to match the template.
-    replaceNestedKeys('scripts', ['tsc', 'storybook', 'test', 'storybook-build']);
+    replaceNestedKeys('scripts', ['tsc', 'storybook', 'test', 'storybook-build', 'i18n']);
+
+    templatePackageJson.overrides = getUpgradeOverrides(packageJson, templatePackageJson.overrides);
 
     // replace top level keys
-    const checkKeys = ['eslintConfig', 'prettier'];
+    const checkKeys = ['eslintConfig', 'prettier', 'overrides'];
     checkKeys.forEach(key => {
       if (JSON.stringify(packageJson[key]) !== JSON.stringify(templatePackageJson[key])) {
         packageJson[key] = templatePackageJson[key];
@@ -757,7 +1250,13 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
   function resetPackageLock() {
     if (fs.existsSync('node_modules')) {
       console.log(`Resetting node_modules folder for more robust package upgrade...`);
-      fs.rm('node_modules', { recursive: true });
+      // Remove the node_modules folder
+      fs.rmSync('node_modules', { recursive: true });
+
+      if (fs.existsSync('node_modules')) {
+        console.error(`Failed to remove node_modules folder.`);
+        return false;
+      }
     }
     if (fs.existsSync('package-lock.json')) {
       console.log(`Resetting package-lock.json file for more robust package upgrade...`);
@@ -790,6 +1289,35 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
   }
 
   /**
+   * Removes "@headlamp-k8s/eslint-config" dependency if it is there.
+   *
+   * It is a transitive dependency of "@kinvolk/headlamp-plugin", and
+   * does not need to be there anymore.
+   *
+   * @returns true unless there is a problem with the upgrade.
+   */
+  function removeEslintConfig() {
+    const packageJsonPath = path.join('.', 'package.json');
+    let packageJson = {};
+    try {
+      packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    } catch (e) {
+      console.error(`Error: Failed to read package.json from "${packageJsonPath}".`);
+      return false;
+    }
+    const oldVersion = packageJson.devDependencies['@headlamp-k8s/eslint-config'];
+    // remove @headlamp-k8s/eslint-config if it is there
+    if (oldVersion) {
+      const cmd = `npm remove @headlamp-k8s/eslint-config --save`;
+      if (runCmd(cmd, '.')) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Upgrade a single package in a folder.
    *
    * @param {string} folder - where the package is.
@@ -809,6 +1337,10 @@ function upgrade(packageFolder, skipPackageUpdates, headlampPluginVersion) {
     let failed = false;
     let reason = '';
     if (skipPackageUpdates !== true) {
+      if (!failed && !removeEslintConfig()) {
+        failed = true;
+        reason = 'removing @headlamp-k8s/eslint-config failed.';
+      }
       if (!failed && !resetPackageLock()) {
         failed = true;
         reason = 'resetting package-lock.json and node_modules failed.';
@@ -923,7 +1455,7 @@ function lint(packageFolder, fix) {
  */
 function tsc(packageFolder) {
   const script = 'tsc --noEmit';
-  return runScriptOnPackages(packageFolder, 'tsc', script, {});
+  return runScriptOnPackages(packageFolder, 'tsc', script, {}, getNativeTypeScriptCommand);
 }
 
 /**
@@ -933,23 +1465,8 @@ function tsc(packageFolder) {
  * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
  */
 function storybook(packageFolder) {
-  try {
-    child_process.execSync(
-      './node_modules/.bin/storybook dev -p 6007 -c node_modules/@kinvolk/headlamp-plugin/config/.storybook',
-      {
-        stdio: 'inherit',
-        cwd: packageFolder,
-        encoding: 'utf8',
-      }
-    );
-  } catch (e) {
-    console.error(
-      `Problem running storybook dev inside of "${packageFolder}" abs: "${resolve(packageFolder)}"`
-    );
-    return 1;
-  }
-
-  return 0;
+  const script = `storybook dev -p 6007 -c node_modules/@kinvolk/headlamp-plugin/config/.storybook`;
+  return runScriptOnPackages(packageFolder, 'storybook dev', script, {});
 }
 
 /**
@@ -970,12 +1487,364 @@ function storybook_build(packageFolder) {
  * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
  */
 function test(packageFolder) {
-  const script = `react-scripts test --transformIgnorePatterns "/node_modules/(?!monaco-editor|spacetime|d3|internmap|react-markdown|xterm|github-markdown-css|vfile|unist-.+|unified|bail|is-plain-obj|trough|remark-.+|mdast-util-.+|micromark|parse-entities|character-entities|property-information|comma-separated-tokens|hast-util-whitespace|remark-.+|space-separated-tokens|decode-named-character-reference|@kinvolk/headlamp-plugin)"`;
+  const script = `vitest -c node_modules/@kinvolk/headlamp-plugin/config/vite.config.mjs`;
   return runScriptOnPackages(packageFolder, 'test', script, { UNDER_TEST: 'true' });
 }
 
-const headlampPluginBin = fs.realpathSync(process.argv[1]);
-console.log('headlampPluginBin path:', headlampPluginBin);
+/**
+ * Set up or update i18n for a plugin package.
+ * This will configure the plugin for internationalization by:
+ * 1. Adding "i18n": ["en", "es", ...] to package.json headlamp config with supported locales
+ * 2. Creating the locales directory structure
+ * 3. Adding npm script for i18n extraction using bundled i18next-parser
+ * 4. Creating i18next parser configuration
+ * 5. Running i18next-parser to extract translatable strings
+ *
+ * @param packageFolder {string} - folder where the package is.
+ * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
+ */
+function setupI18n(packageFolder) {
+  if (!fs.existsSync(packageFolder)) {
+    console.error(`"${packageFolder}" does not exist. Not setting up i18n.`);
+    return 1;
+  }
+
+  const oldCwd = process.cwd();
+
+  /**
+   * Set up i18n for a single package.
+   * @param {string} folder - folder where the package is.
+   * @returns {boolean} - true if successful, false otherwise.
+   */
+  function setupI18nForPackage(folder) {
+    if (!fs.existsSync(path.join(folder, 'package.json'))) {
+      return false;
+    }
+
+    process.chdir(folder);
+    console.log(`Setting up i18n for "${folder}"...`);
+
+    try {
+      // Read and update package.json
+      const packageJsonPath = 'package.json';
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+
+      // Initialize headlamp config if it doesn't exist
+      if (!packageJson.headlamp) {
+        packageJson.headlamp = {};
+      }
+
+      // Check if i18n is already enabled (array of locales)
+      if (Array.isArray(packageJson.headlamp.i18n) && packageJson.headlamp.i18n.length > 0) {
+        console.log(
+          `✅ i18n is already enabled for ${
+            packageJson.name
+          } with locales: ${packageJson.headlamp.i18n.join(', ')}`
+        );
+      } else {
+        // Enable i18n with empty locales array (locales will be added when specified)
+        packageJson.headlamp.i18n = [];
+        console.log(`✅ Enabled i18n in package.json for ${packageJson.name}`);
+        console.log(`💡 To add locales, use: npm run i18n <locale> (e.g., npm run i18n es)`);
+      }
+
+      // Add i18n script if not already present
+      if (!packageJson.scripts) {
+        packageJson.scripts = {};
+      }
+
+      if (!packageJson.scripts.i18n) {
+        packageJson.scripts.i18n = 'headlamp-plugin i18n';
+        console.log(`📜 Added npm i18n script`);
+      }
+
+      // Write updated package.json
+      fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+
+      // Create locales directory structure
+      const localesDir = path.join('locales');
+
+      if (!fs.existsSync(localesDir)) {
+        fs.mkdirSync(localesDir, { recursive: true });
+        console.log(`📁 Created ${localesDir} directory`);
+      }
+
+      // Create language directories for the locales specified in package.json
+      const supportedLocales = packageJson.headlamp.i18n || [];
+      supportedLocales.forEach(locale => {
+        const localeDir = path.join(localesDir, locale);
+        if (!fs.existsSync(localeDir)) {
+          fs.mkdirSync(localeDir, { recursive: true });
+
+          // Create empty translation.json file
+          const translationFile = path.join(localeDir, 'translation.json');
+          fs.writeFileSync(translationFile, '{\n}\n');
+          console.log(`📁 Created ${locale} locale directory`);
+        }
+      });
+
+      // Check if there's a local config file - if not, we'll use the bundled one
+      const localConfigPath = 'i18next-parser.config.js';
+      if (fs.existsSync(localConfigPath)) {
+        console.log(`⚙️ Using existing local i18next-parser configuration`);
+      } else {
+        console.log(`⚙️ Using default i18next-parser configuration from headlamp-plugin`);
+      }
+
+      // Run i18next-parser to extract translatable strings
+      console.log(`🔍 Extracting translatable strings from source code...`);
+      const i18nextPath = path.join(__dirname, '..', 'node_modules', '.bin', 'i18next' + binExt);
+      const bundledConfigPath = path.join(__dirname, '..', 'config', 'i18next-parser.config.js');
+
+      try {
+        child_process.execFileSync(
+          ...viaCmd(i18nextPath, ['src/**/*.{ts,tsx,js,jsx}', '-c', bundledConfigPath]),
+          {
+            stdio: 'inherit',
+            cwd: process.cwd(),
+          }
+        );
+        console.log(`📝 Successfully extracted translatable strings`);
+      } catch (error) {
+        console.warn(`⚠️ Warning: Failed to run i18next-parser: ${error.message}`);
+        console.log(`💡 You can manually run: npm run i18n`);
+      }
+
+      console.log(`\n🎉 i18n setup complete for ${packageJson.name}!`);
+      console.log(`\n📖 Next steps:`);
+      console.log(`1. Use the useTranslation() hook in your components:`);
+      console.log(`   import { useTranslation } from '@kinvolk/headlamp-plugin/i18n';`);
+      console.log(`   const { t } = useTranslation();`);
+      console.log(`   return <div>{t('your.translation.key')}</div>;`);
+      console.log(`2. Add more locales: npm run i18n <locale> (e.g., npm run i18n es)`);
+      console.log(`3. Extract updated translatable strings: npm run i18n`);
+      console.log(`4. Add translations in locales/<locale>/translation.json`);
+      console.log(`\n💡 Note: Using default i18next-parser configuration from headlamp-plugin.`);
+      console.log(`   If you need custom configuration, create your own i18next-parser.config.js`);
+
+      return true;
+    } catch (error) {
+      console.error(`❌ Failed to set up i18n for "${folder}":`, error.message);
+      return false;
+    } finally {
+      process.chdir(oldCwd);
+    }
+  }
+
+  /**
+   * Set up i18n for each package inside the folder.
+   */
+  function setupI18nForFolderOfPackages() {
+    const folders = fs.readdirSync(packageFolder, { withFileTypes: true }).filter(fileName => {
+      return (
+        fileName.isDirectory() &&
+        fs.existsSync(path.join(packageFolder, fileName.name, 'package.json'))
+      );
+    });
+
+    if (folders.length === 0) {
+      return false;
+    }
+
+    let allSuccessful = true;
+    folders.forEach(folder => {
+      const folderToProcess = path.join(packageFolder, folder.name);
+      if (!setupI18nForPackage(folderToProcess)) {
+        allSuccessful = false;
+      }
+    });
+
+    return allSuccessful;
+  }
+
+  // Try to set up i18n for a single package first
+  const singlePackageResult = setupI18nForPackage(packageFolder);
+
+  if (!singlePackageResult) {
+    // If it's not a single package, try treating it as a folder of packages
+    const folderResult = setupI18nForFolderOfPackages();
+    if (!folderResult) {
+      console.error(
+        `"${packageFolder}" does not contain a package or packages. Not setting up i18n.`
+      );
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * Run i18next-parser to extract translatable strings from a plugin.
+ * This is called when the user runs 'headlamp-plugin i18n' directly.
+ * If a locale is provided, it will be added to the supported locales in package.json.
+ *
+ * @param packageFolder {string} - folder where the package is.
+ * @param newLocale {string} - optional locale to add to the plugin.
+ * @returns {0 | 1} Exit code, where 0 is success, 1 is failure.
+ */
+function extractI18n(packageFolder, newLocale) {
+  if (!fs.existsSync(packageFolder)) {
+    console.error(`"${packageFolder}" does not exist.`);
+    return 1;
+  }
+
+  const oldCwd = process.cwd();
+
+  try {
+    process.chdir(packageFolder);
+
+    // Check if this is a package with i18n enabled
+    const packageJsonPath = path.join(packageFolder, 'package.json');
+    if (!fs.existsSync(packageJsonPath)) {
+      console.error(`No package.json found in "${packageFolder}".`);
+      return 1;
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+
+    // Auto-setup i18n if not already configured
+    if (!Array.isArray(packageJson.headlamp?.i18n)) {
+      console.log(
+        `🔧 i18n not configured for "${
+          packageJson.name || packageFolder
+        }". Setting up automatically...`
+      );
+
+      // Initialize headlamp config if it doesn't exist
+      if (!packageJson.headlamp) {
+        packageJson.headlamp = {};
+      }
+
+      // Enable i18n with empty locales array (locales will be added when specified)
+      packageJson.headlamp.i18n = [];
+
+      // Add i18n script if not already present
+      if (!packageJson.scripts) {
+        packageJson.scripts = {};
+      }
+
+      if (!packageJson.scripts.i18n) {
+        packageJson.scripts.i18n = 'headlamp-plugin i18n';
+        console.log(`📜 Added npm i18n script`);
+      }
+
+      // Create locales directory structure
+      const localesDir = path.join(packageFolder, 'locales');
+
+      if (!fs.existsSync(localesDir)) {
+        fs.mkdirSync(localesDir, { recursive: true });
+        console.log(`📁 Created ${localesDir} directory`);
+      }
+
+      console.log(`✅ Enabled i18n in package.json for ${packageJson.name}`);
+
+      // Write updated package.json
+      fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+    }
+
+    // Handle adding a new locale
+    if (newLocale) {
+      // Validate locale format (simple validation for common formats like 'en', 'es', 'en-US')
+      if (!/^[a-z]{2}(-[A-Z]{2})?$/.test(newLocale)) {
+        console.error(
+          `❌ Invalid locale format: "${newLocale}". Use format like 'en', 'es', 'en-US', etc.`
+        );
+        return 1;
+      }
+
+      // Get current supported locales
+      const supportedLocales = packageJson.headlamp.i18n;
+
+      // Add new locale if not already present
+      if (!supportedLocales.includes(newLocale)) {
+        supportedLocales.push(newLocale);
+        packageJson.headlamp.i18n = supportedLocales;
+
+        // Write updated package.json
+        fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+        console.log(
+          `✅ Added locale "${newLocale}" to supported locales: ${supportedLocales.join(', ')}`
+        );
+
+        // Create locale directory and translation file
+        const localesDir = path.join(packageFolder, 'locales');
+        const localeDir = path.join(localesDir, newLocale);
+
+        if (!fs.existsSync(localeDir)) {
+          fs.mkdirSync(localeDir, { recursive: true });
+          const translationFile = path.join(localeDir, 'translation.json');
+          fs.writeFileSync(translationFile, '{\n}\n');
+          console.log(`📁 Created ${newLocale} locale directory and translation file`);
+        } else {
+          console.log(`📁 Locale directory for "${newLocale}" already exists`);
+        }
+      } else {
+        console.log(
+          `📝 Locale "${newLocale}" is already supported: ${supportedLocales.join(', ')}`
+        );
+      }
+    }
+
+    // Check for local config first, then fall back to bundled config
+    const localConfigPath = path.join(packageFolder, 'i18next-parser.config.js');
+    const bundledConfigPath = path.join(__dirname, '..', 'config', 'i18next-parser.config.js');
+
+    let configToUse = '';
+    if (fs.existsSync(localConfigPath)) {
+      configToUse = './i18next-parser.config.js';
+      console.log(`🔍 Using local i18next-parser configuration`);
+    } else if (fs.existsSync(bundledConfigPath)) {
+      configToUse = bundledConfigPath;
+      console.log(`🔍 Using bundled i18next-parser configuration`);
+    } else {
+      console.error(
+        `❌ No i18next-parser configuration found. Run 'headlamp-plugin setup-i18n' first.`
+      );
+      return 1;
+    }
+
+    console.log(`🔍 Extracting translatable strings from ${packageJson.name || packageFolder}...`);
+
+    // Use npx to run i18next from the headlamp-plugin package
+    const headlampPluginPath = path.join(__dirname, '..');
+    child_process.execFileSync(
+      ...viaCmd('npx' + binExt, [
+        '--prefix',
+        headlampPluginPath,
+        'i18next',
+        'src/**/*.{ts,tsx,js,jsx}',
+        '-c',
+        configToUse,
+      ]),
+      {
+        stdio: 'inherit',
+        cwd: packageFolder,
+      }
+    );
+
+    console.log(
+      `✅ Successfully extracted translatable strings for ${packageJson.name || packageFolder}`
+    );
+
+    if (newLocale) {
+      console.log(`\n💡 Translation tips for "${newLocale}":`);
+      console.log(`1. Edit locales/${newLocale}/translation.json to add your translations`);
+      console.log(`2. Use the same keys as in locales/en/translation.json`);
+      console.log(`3. Re-run 'npm run i18n' after adding new translatable strings to your code`);
+    }
+
+    return 0;
+  } catch (error) {
+    console.error(`❌ Failed to extract translatable strings: ${error.message}`);
+    return 1;
+  } finally {
+    process.chdir(oldCwd);
+  }
+}
+
+// const headlampPluginBin = fs.realpathSync(process.argv[1]);
+// console.log('headlampPluginBin path:', headlampPluginBin);
 
 yargs(process.argv.slice(2))
   .command(
@@ -988,12 +1857,13 @@ yargs(process.argv.slice(2))
         default: '.',
       });
     },
-    argv => {
-      process.exitCode = build(argv.package);
+    async argv => {
+      // @ts-ignore
+      process.exitCode = await build(argv.package);
     }
   )
-  .command('start', 'Watch for changes and build plugin.', {}, () => {
-    process.exitCode = start();
+  .command('start', 'Watch for changes and build plugin.', {}, async () => {
+    process.exitCode = await start();
   })
   .command(
     'create <name>',
@@ -1008,10 +1878,64 @@ yargs(process.argv.slice(2))
           describe:
             'For development of headlamp-plugin itself, so it uses npm link @kinvolk/headlamp-plugin.',
           type: 'boolean',
+        })
+        .option('noinstall', {
+          describe: 'Skip installing dependencies with npm ci',
+          type: 'boolean',
         });
     },
     argv => {
-      process.exitCode = create(argv.name, argv.link);
+      // @ts-ignore
+      process.exitCode = create(argv.name, argv.link, argv.noinstall);
+    }
+  )
+  .command(
+    'i18n [package] [locale]',
+    'Extract translatable strings from plugin source code. Optionally add a new locale. Use --setup to configure i18n for a package. <package> defaults to current working directory.',
+    yargs => {
+      yargs
+        .positional('package', {
+          describe:
+            'Package to extract translatable strings from (or package to setup with --setup)',
+          type: 'string',
+          default: '.',
+        })
+        .positional('locale', {
+          describe: 'New locale to add to the plugin (e.g., es, fr, pt-BR)',
+          type: 'string',
+        })
+        .option('setup', {
+          describe:
+            'Set up i18n for the package or folder of packages instead of extracting strings',
+          type: 'boolean',
+        })
+        .example('headlamp-plugin i18n', 'Extract strings from current directory')
+        .example('headlamp-plugin i18n . es', 'Add Spanish locale and extract strings')
+        .example('headlamp-plugin i18n my-plugin pt-BR', 'Add Brazilian Portuguese to my-plugin')
+        .example('headlamp-plugin i18n --setup', 'Set up i18n in the current package');
+    },
+    argv => {
+      // If --setup flag is provided, run setupI18n and return
+      if (argv.setup) {
+        // @ts-ignore
+        process.exitCode = setupI18n(argv.package);
+        return;
+      }
+
+      // Handle the case where user runs "npm run i18n -- pt"
+      // In this case, "pt" gets passed as the package parameter instead of locale
+      let packageFolder = argv.package;
+      let newLocale = argv.locale;
+
+      // If package looks like a locale code and locale is undefined,
+      // assume they meant to add a locale to the current directory
+      if (!newLocale && packageFolder !== '.' && /^[a-z]{2}(-[A-Z]{2})?$/.test(packageFolder)) {
+        newLocale = packageFolder;
+        packageFolder = '.';
+      }
+
+      // @ts-ignore
+      process.exitCode = extractI18n(packageFolder, newLocale);
     }
   )
   .command(
@@ -1034,7 +1958,39 @@ yargs(process.argv.slice(2))
       });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = extract(argv.pluginPackages, argv.outputPlugins);
+    }
+  )
+  .command(
+    'package [pluginPath] [outputDir]',
+    'Creates a tarball of the plugin package in the format Headlamp expects.',
+    yargs => {
+      yargs.positional('pluginPath', {
+        describe:
+          'A folder of a plugin package that have been built with dist/main.js in it.' +
+          ' Defaults to current working directory.',
+        type: 'string',
+      });
+      yargs.positional('outputDir', {
+        describe:
+          'The destination folder in which to create the archive.' +
+          'Creates this folder if it does not exist.',
+        type: 'string',
+      });
+    },
+    async argv => {
+      let pluginPath = argv.pluginPath;
+      if (!pluginPath) {
+        pluginPath = process.cwd();
+      }
+
+      let outputDir = argv.outputDir;
+      if (!outputDir) {
+        outputDir = process.cwd();
+      }
+
+      process.exitCode = await createArchive(pluginPath, outputDir);
     }
   )
   .command(
@@ -1054,6 +2010,7 @@ yargs(process.argv.slice(2))
         });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = format(argv.package, argv.check);
     }
   )
@@ -1075,6 +2032,7 @@ yargs(process.argv.slice(2))
         });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = lint(argv.package, argv.fix);
     }
   )
@@ -1091,6 +2049,7 @@ yargs(process.argv.slice(2))
       });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = tsc(argv.package);
     }
   )
@@ -1105,6 +2064,7 @@ yargs(process.argv.slice(2))
       });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = storybook(argv.package);
     }
   )
@@ -1120,6 +2080,7 @@ yargs(process.argv.slice(2))
       });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = storybook_build(argv.package);
     }
   )
@@ -1146,6 +2107,7 @@ yargs(process.argv.slice(2))
         });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = upgrade(argv.package, argv.skipPackageUpdates, argv.headlampPluginVersion);
     }
   )
@@ -1160,7 +2122,265 @@ yargs(process.argv.slice(2))
       });
     },
     argv => {
+      // @ts-ignore
       process.exitCode = test(argv.package);
+    }
+  )
+  .command(
+    'install [URL]',
+    'Install plugin(s) from a configuration file or a plugin artifact Hub URL',
+    yargs => {
+      return yargs
+        .positional('URL', {
+          describe: 'URL of the plugin to install',
+          type: 'string',
+        })
+        .option('config', {
+          alias: 'c',
+          describe: 'Path to plugin configuration file',
+          type: 'string',
+        })
+        .option('folderName', {
+          describe: 'Name of the folder to install the plugin into',
+          type: 'string',
+        })
+        .option('headlampVersion', {
+          describe: 'Version of headlamp to install the plugin into',
+          type: 'string',
+        })
+        .option('quiet', {
+          alias: 'q',
+          describe: 'Do not print logs',
+          type: 'boolean',
+        })
+        .option('watch', {
+          alias: 'w',
+          describe: 'Watch config file for changes and automatically reinstall plugins',
+          type: 'boolean',
+        })
+        .check(argv => {
+          if (!argv.URL && !argv.config) {
+            throw new Error('Either URL or --config must be specified');
+          }
+          if (argv.URL && argv.config) {
+            throw new Error('Cannot specify both URL and --config');
+          }
+          if (argv.watch && !argv.config) {
+            throw new Error('Watch option can only be used with --config');
+          }
+          return true;
+        });
+    },
+    async argv => {
+      const { URL, config, folderName, headlampVersion, quiet, watch } = argv;
+      try {
+        const progressCallback = quiet
+          ? () => {}
+          : data => {
+              const { type = 'info', message, raise = true } = data;
+              if (config && !URL) {
+                // bulk installation
+                let prefix = '';
+                if (data.current || data.total || data.plugin) {
+                  prefix = `${data.current} of ${data.total} (${data.plugin}): `;
+                }
+                if (type === 'info' || type === 'success') {
+                  console.log(`${prefix}${type}: ${message}`);
+                } else if (type === 'error' && raise) {
+                  throw new Error(message);
+                } else {
+                  console.error(`${prefix}${type}: ${message}`);
+                }
+              } else {
+                if (type === 'error' || type === 'success') {
+                  console.error(`${type}: ${message}`);
+                }
+              }
+            };
+
+        /**
+         * @param {string} configPath
+         */
+        async function installFromConfig(configPath) {
+          const installer = new MultiPluginManager(folderName, headlampVersion, progressCallback);
+          const result = await installer.installFromConfig(configPath);
+          if (result.failed > 0) {
+            throw new Error(`${result.failed} plugins failed to install`);
+          }
+        }
+
+        if (URL) {
+          // Single plugin installation
+          try {
+            await PluginManager.install(URL, folderName, headlampVersion, progressCallback);
+          } catch (e) {
+            console.error(e.message);
+            process.exit(1); // Exit with error status
+          }
+        } else if (config) {
+          // Bulk installation from config
+          try {
+            await installFromConfig(config);
+          } catch (error) {
+            console.error('Installation failed', {
+              error: error.message,
+              stack: error.stack,
+            });
+          }
+
+          if (watch) {
+            console.log(`Watching ${config} for changes...`);
+            fs.watch(config, async eventType => {
+              if (eventType === 'change') {
+                console.log(`Config file changed, reinstalling plugins...`);
+                try {
+                  await installFromConfig(config);
+                  console.log('Plugins reinstalled successfully');
+                } catch (error) {
+                  console.error('Installation failed', {
+                    error: error.message,
+                    stack: error.stack,
+                  });
+                }
+              }
+            });
+
+            // Keep the process running
+            process.stdin.resume();
+
+            // Handle graceful shutdown
+            process.on('SIGINT', () => {
+              console.log('\nStopping config file watch');
+              process.exit(0);
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Installation failed', {
+          error: error.message,
+          stack: error.stack,
+        });
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'update <pluginName>',
+    'Update a plugin to the latest version',
+    yargs => {
+      yargs
+        .positional('pluginName', {
+          describe: 'Name of the plugin to update',
+          type: 'string',
+        })
+        .positional('folderName', {
+          describe: 'Name of the folder that contains the plugin',
+          type: 'string',
+        })
+        .positional('headlampVersion', {
+          describe: 'Version of headlamp to update the plugin into',
+          type: 'string',
+        })
+        .option('quiet', {
+          alias: 'q',
+          describe: 'Do not print logs',
+          type: 'boolean',
+        });
+    },
+    async argv => {
+      const { pluginName, folderName, headlampVersion, quiet } = argv;
+      const progressCallback = quiet
+        ? null
+        : data => {
+            if (data.type === 'error' || data.type === 'success') {
+              console.error(data.type, ':', data.message);
+            }
+          }; // Use console.log for logs if not in quiet mode
+      try {
+        await PluginManager.update(pluginName, folderName, headlampVersion, progressCallback);
+      } catch (e) {
+        console.error(e.message);
+        process.exit(1); // Exit with error status
+      }
+    }
+  )
+  .command(
+    'uninstall <pluginName>',
+    'Uninstall a plugin',
+    yargs => {
+      yargs
+        .positional('pluginName', {
+          describe: 'Name of the plugin to uninstall',
+          type: 'string',
+        })
+        .option('folderName', {
+          describe: 'Name of the folder that contains the plugin',
+          type: 'string',
+        })
+        .option('quiet', {
+          alias: 'q',
+          describe: 'Do not print logs',
+          type: 'boolean',
+        });
+    },
+    async argv => {
+      const { pluginName, folderName, quiet } = argv;
+      const progressCallback = quiet
+        ? null
+        : data => {
+            if (data.type === 'error' || data.type === 'success') {
+              console.error(data.type, ':', data.message);
+            }
+          }; // Use console.log for logs if not in quiet mode
+      try {
+        await PluginManager.uninstall(pluginName, folderName, progressCallback);
+      } catch (e) {
+        console.error(e.message);
+        process.exit(1); // Exit with error status
+      }
+    }
+  )
+  .command(
+    'list',
+    'List installed plugins',
+    yargs => {
+      yargs
+        .option('folderName', {
+          describe: 'Name of the folder that contains the plugins',
+          type: 'string',
+        })
+        .option('json', {
+          alias: 'j',
+          describe: 'Output in JSON format',
+          type: 'boolean',
+        });
+    },
+    async argv => {
+      const { folderName, json } = argv;
+      const progressCallback = data => {
+        if (json) {
+          console.log(JSON.stringify(data.data));
+        } else {
+          // display table
+          const rows = [['Name', 'Version', 'Folder Name', 'Repo', 'Author']];
+          data.data.forEach(plugin => {
+            rows.push([
+              plugin.pluginName,
+              plugin.pluginVersion,
+              plugin.folderName,
+              plugin.repoName,
+              plugin.author,
+            ]);
+          });
+          console.log(table(rows));
+        }
+      };
+      try {
+        await PluginManager.list(folderName, progressCallback);
+      } catch (e) {
+        console.error(e.message);
+        process.exit(1); // Exit with error status
+      }
     }
   )
   .demandCommand(1, '')

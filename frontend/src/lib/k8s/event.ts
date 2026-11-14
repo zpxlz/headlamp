@@ -1,8 +1,27 @@
-import React from 'react';
-import { CancellablePromise, ResourceClasses } from '.';
-import { ApiError, apiFactoryWithNamespace, QueryParameters } from './apiProxy';
-import { request } from './apiProxy';
-import { KubeMetadata, KubeObject, makeKubeObject } from './cluster';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { useMemo } from 'react';
+import { request } from './api/v1/clusterRequests';
+import type { QueryParameters } from './api/v1/queryParameters';
+import type { ApiError } from './api/v2/ApiError';
+import type { KubeMetadata } from './KubeMetadata';
+import type { KubeObjectClass } from './KubeObject';
+import { KubeObject } from './KubeObject';
+import { ResourceClasses } from './resourceClasses';
 
 export interface KubeEvent {
   type: string;
@@ -21,8 +40,15 @@ export interface KubeEvent {
   [otherProps: string]: any;
 }
 
-class Event extends makeKubeObject<KubeEvent>('Event') {
-  static apiEndpoint = apiFactoryWithNamespace('', 'v1', 'events');
+class Event extends KubeObject<KubeEvent> {
+  static kind = 'Event';
+  static apiName = 'events';
+  static apiVersion = 'v1';
+
+  static isNamespaced = true;
+
+  static useListForClusters = useEventListForClusters;
+  static useWarningList = useEventWarningList;
 
   // Max number of events to fetch from the API
   private static maxEventsLimit = 2000;
@@ -105,7 +131,7 @@ class Event extends makeKubeObject<KubeEvent>('Event') {
       return eventTime;
     }
 
-    const firstTimestamp = this.firstTimestamp;
+    const firstTimestamp = this.getValue('firstTimestamp');
     if (!!firstTimestamp) {
       return firstTimestamp;
     }
@@ -118,6 +144,7 @@ class Event extends makeKubeObject<KubeEvent>('Event') {
     const namespace = object.metadata.namespace;
     const name = object.metadata.name;
     const objectKind = object.kind;
+    const cluster = object.cluster;
 
     let path = '/api/v1/events';
     const fieldSelector: { [key: string]: string } = {
@@ -139,7 +166,7 @@ class Event extends makeKubeObject<KubeEvent>('Event') {
       limit: this.maxLimit,
     };
 
-    const response = await request(path, {}, true, true, queryParams);
+    const response = await request(path, { cluster }, true, true, queryParams);
 
     return response.items;
   }
@@ -149,103 +176,99 @@ class Event extends makeKubeObject<KubeEvent>('Event') {
       return null;
     }
 
-    const InvolvedObjectClass = ResourceClasses[this.involvedObject.kind];
+    const InvolvedObjectClass = (ResourceClasses as Record<string, KubeObjectClass>)[
+      this.involvedObject.kind
+    ];
     let objInstance: KubeObject | null = null;
     if (!!InvolvedObjectClass) {
-      objInstance = new InvolvedObjectClass({
-        kind: this.involvedObject.kind,
-        metadata: {
-          name: this.involvedObject.name,
-          namespace: this.involvedObject.namespace,
+      objInstance = new InvolvedObjectClass(
+        {
+          kind: this.involvedObject.kind,
+          metadata: {
+            name: this.involvedObject.name,
+            namespace: InvolvedObjectClass.isNamespaced
+              ? this.involvedObject.namespace ?? this.getNamespace()
+              : undefined,
+          } as KubeMetadata,
         },
-      });
+        this.cluster
+      );
     }
 
     return objInstance;
   }
-
-  static useListForClusters(clusterNames: string[], options?: { queryParams?: QueryParameters }) {
-    type EventErrorObj = {
-      [cluster: string]: {
-        warnings: Event[];
-        error?: ApiError | null;
-      };
-    };
-    const [clusters, setClusters] = React.useState<Set<string>>(new Set(clusterNames));
-    const [events, setEvents] = React.useState<EventErrorObj>({});
-    const queryParameters = Object.assign(
-      { limit: this.maxEventsLimit },
-      options?.queryParams ?? {}
-    );
-
-    // Make sure we only update when there are different cluster names
-    React.useEffect(() => {
-      let shouldUpdate = false;
-      for (const cluster of clusterNames) {
-        if (!clusters.has(cluster)) {
-          shouldUpdate = true;
-          break;
-        }
-      }
-      if (shouldUpdate) {
-        setClusters(new Set(clusterNames));
-      }
-    }, [clusters, clusterNames]);
-
-    React.useEffect(() => {
-      if (clusters.size === 0) {
-        console.debug('No clusters specified when fetching warnings');
-      }
-      const cancellables: CancellablePromise[] = [];
-      for (const cluster of clusters) {
-        const cancelFunc = Event.apiList(
-          (events: Event[]) => {
-            setEvents(prevWarnings => ({
-              ...prevWarnings,
-              [cluster]: {
-                warnings: events,
-                error: null,
-              },
-            }));
-          },
-          error => {
-            setEvents(prevWarnings => ({
-              ...prevWarnings,
-              [cluster]: {
-                warnings: [],
-                error,
-              },
-            }));
-          },
-          {
-            cluster: cluster,
-            queryParams: queryParameters,
-          }
-        )();
-        cancellables.push(cancelFunc);
-      }
-
-      return function cancelAllConnectedListings() {
-        for (const cancellable of cancellables) {
-          cancellable.then(c => c());
-        }
-      };
-    }, [clusters]);
-
-    return events;
-  }
-
-  static useWarningList(clusters: string[], options?: { queryParams?: QueryParameters }) {
-    const queryParameters = Object.assign(
-      {
-        limit: this.maxEventsLimit,
-        fieldSelector: 'type!=Normal',
-      },
-      options?.queryParams ?? {}
-    );
-
-    return this.useListForClusters(clusters, { queryParams: queryParameters });
-  }
 }
 
 export default Event;
+
+/**
+ * Fetch events for given clusters
+ *
+ * Important! Make sure to have the parent component have clusters as a key
+ * so that component remounts when clusters change, instead of rerendering
+ * with different number of clusters
+ */
+export function useEventListForClusters(
+  clusterNames: string[],
+  options: { queryParams?: QueryParameters } = {}
+) {
+  const queries = Event.useList({
+    clusters: clusterNames,
+    ...options.queryParams,
+  });
+
+  type EventsPerCluster = {
+    [cluster: string]: {
+      warnings: Event[];
+      error?: ApiError | null;
+    };
+  };
+
+  const result = useMemo(() => {
+    const res: EventsPerCluster = {};
+
+    queries.errors?.forEach(error => {
+      if (error.cluster) {
+        res[error.cluster] ??= { warnings: [] };
+        res[error.cluster].error = error;
+      }
+    });
+
+    Object.entries(queries.clusterResults ?? {}).forEach(([cluster, result]) => {
+      if (!res[cluster]) {
+        res[cluster] = { warnings: [] };
+      }
+
+      res[cluster].warnings = result.items ?? [];
+    });
+
+    return res;
+  }, [queries.clusterResults, queries.errors]);
+
+  return result;
+}
+
+/**
+ * Fetch warning events for given clusters
+ * Amount is limited to {@link Event.maxLimit}
+ *
+ * Important! Make sure to have the parent component have clusters as a key
+ * so that component remounts when clusters change, instead of rerendering
+ * with different number of clusters
+ */
+export function useEventWarningList(
+  clusters: string[],
+  options?: { queryParams?: QueryParameters }
+) {
+  const queryParameters = Object.assign(
+    {
+      limit: Event.maxLimit,
+      fieldSelector: 'type!=Normal',
+    },
+    options?.queryParams ?? {}
+  );
+
+  const warningsList = useEventListForClusters(clusters, { queryParams: queryParameters });
+
+  return warningsList;
+}

@@ -1,6 +1,24 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { IconProps } from '@iconify/react';
+import type { SxProps, Theme } from '@mui/material/styles';
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import themesConf from '../../lib/themes';
+import { castDraft } from 'immer';
+import React from 'react';
 
 export enum DefaultSidebars {
   HOME = 'HOME',
@@ -18,7 +36,7 @@ export interface SidebarEntry {
   /**
    * Text to display under the name.
    */
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   /**
    * Label to display.
    */
@@ -44,6 +62,14 @@ export interface SidebarEntry {
   /** The sidebar to display this item in. If not specified, it will be displayed in the default sidebar.
    */
   sidebar?: DefaultSidebars | string;
+  /**
+   * The type of sidebar entry to render. Defaults to a clickable link item.
+   */
+  entryType?: 'link' | 'subheader';
+  /**
+   * Custom style overrides for subheader entries.
+   */
+  sx?: SxProps<Theme>;
 }
 
 export interface SidebarState {
@@ -71,24 +97,49 @@ export interface SidebarState {
    */
   entries: { [propName: string]: SidebarEntry };
   /**
-   * Filters to apply to the sidebar entries.
+   * Filters to apply to the IN_CLUSTER sidebar entries.
    */
   filters: ((entry: SidebarEntry) => SidebarEntry | null)[];
+  /**
+   * Filters to apply to the HOME sidebar entries.
+   */
+  homeFilters: ((entry: SidebarEntry) => SidebarEntry | null)[];
 }
 
 export function setInitialSidebarOpen() {
   let defaultOpen;
 
-  const openUserSelected = localStorage?.getItem('sidebar')
-    ? !JSON.parse(localStorage.getItem('sidebar')!).shrink
-    : undefined;
+  let openUserSelected: boolean | undefined = undefined;
+  const storedSidebar = localStorage?.getItem('sidebar');
+
+  if (storedSidebar) {
+    try {
+      const parsed = JSON.parse(storedSidebar);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'shrink' in parsed &&
+        typeof parsed.shrink === 'boolean'
+      ) {
+        openUserSelected = !parsed.shrink;
+      }
+    } catch (e) {
+      console.warn('Failed to parse sidebar local storage', e);
+    }
+  }
 
   if (openUserSelected !== undefined) {
     defaultOpen = openUserSelected;
   } else {
-    defaultOpen = window?.innerWidth
-      ? window.innerWidth > themesConf.light.breakpoints.values.md
-      : true;
+    // Check for build-time environment variable first
+    const envDefaultOpen = import.meta.env.REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN;
+    if (envDefaultOpen !== undefined) {
+      // Convert string to boolean, accepting 'true'/'false' or '1'/'0'
+      defaultOpen = envDefaultOpen === 'true' || envDefaultOpen === '1';
+    } else {
+      // Fall back to window width-based logic
+      defaultOpen = window?.innerWidth ? window.innerWidth > 960 : true;
+    }
   }
 
   return {
@@ -106,6 +157,7 @@ export const initialState: SidebarState = {
   ...setInitialSidebarOpen(),
   entries: {},
   filters: [],
+  homeFilters: [],
 };
 
 const sidebarSlice = createSlice({
@@ -134,17 +186,27 @@ const sidebarSlice = createSlice({
      * Sets an item in the sidebar.
      */
     setSidebarItem(state, action: PayloadAction<SidebarEntry>) {
-      state.entries[action.payload.name] = action.payload;
+      state.entries[action.payload.name] = castDraft(action.payload);
     },
 
     /**
-     * Sets a filter for sidebar items.
+     * Sets a filter for IN_CLUSTER sidebar items.
      */
     setSidebarItemFilter(
       state,
       action: PayloadAction<(entry: SidebarEntry) => SidebarEntry | null>
     ) {
       state.filters.push(action.payload);
+    },
+
+    /**
+     * Sets a filter for HOME sidebar items.
+     */
+    setHomeSidebarItemFilter(
+      state,
+      action: PayloadAction<(entry: SidebarEntry) => SidebarEntry | null>
+    ) {
+      state.homeFilters.push(action.payload);
     },
 
     /**
@@ -163,6 +225,7 @@ export const {
   setSidebarVisible,
   setSidebarItem,
   setSidebarItemFilter,
+  setHomeSidebarItemFilter,
   setWhetherSidebarOpen,
 } = sidebarSlice.actions;
 

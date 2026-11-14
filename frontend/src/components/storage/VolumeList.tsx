@@ -1,8 +1,25 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { useTranslation } from 'react-i18next';
 import PersistentVolume from '../../lib/k8s/persistentVolume';
-import { LightTooltip, Link } from '../common';
 import LabelListItem from '../common/LabelListItem';
+import Link from '../common/Link';
 import ResourceListView from '../common/Resource/ResourceListView';
+import LightTooltip from '../common/Tooltip/TooltipLight';
 import { makePVStatusLabel } from './VolumeDetails';
 
 export default function VolumeList() {
@@ -20,51 +37,59 @@ export default function VolumeList() {
         {
           id: 'className',
           label: t('Class Name'),
-          getter: volume => {
+          filterVariant: 'multi-select',
+          getValue: volume => volume.spec.storageClassName ?? '',
+          render: volume => {
             const name = volume.spec.storageClassName;
             if (!name) {
               return '';
             }
             return (
-              <Link routeName="storageClass" params={{ name }} tooltip>
+              <Link
+                routeName="storageClass"
+                params={{ name }}
+                activeCluster={volume.cluster}
+                tooltip
+              >
                 {name}
               </Link>
             );
           },
-          sort: (v1, v2) => v1.spec.storageClassName.localeCompare(v2.spec.storageClassName),
         },
         {
           id: 'capacity',
           label: t('Capacity'),
-          getter: volume => volume.spec.capacity.storage,
-          sort: true,
+          getValue: volume => volume.spec.capacity.storage,
         },
         {
           id: 'accessModes',
           label: t('Access Modes'),
-          getter: volume => <LabelListItem labels={volume?.spec?.accessModes || []} />,
-          sort: true,
+          filterVariant: 'multi-select',
+          getValue: volume => volume?.spec?.accessModes?.join(', '),
+          render: volume => <LabelListItem labels={volume?.spec?.accessModes || []} />,
         },
         {
           id: 'reclaimPolicy',
           label: t('Reclaim Policy'),
-          getter: volume => volume.spec.persistentVolumeReclaimPolicy,
-          sort: true,
+          filterVariant: 'multi-select',
+          getValue: volume => volume.spec.persistentVolumeReclaimPolicy,
         },
         {
           id: 'reason',
           label: t('translation|Reason'),
-          getter: volume => {
+          filterVariant: 'multi-select',
+          getValue: volume => volume.status.reason,
+          render: volume => {
             const reason = volume.status.reason;
             return <LightTooltip title={reason}>{reason}</LightTooltip>;
           },
           show: false,
-          sort: true,
         },
         {
           id: 'claim',
           label: t('Claim'),
-          getter: volume => {
+          getValue: volume => volume.spec?.claimRef?.name ?? '',
+          render: volume => {
             const claim = volume.spec.claimRef?.name;
             if (!claim) {
               return null;
@@ -75,21 +100,23 @@ export default function VolumeList() {
               <Link
                 routeName="persistentVolumeClaim"
                 params={{ name: claim, namespace: claimNamespace }}
+                activeCluster={volume.cluster}
                 tooltip
               >
                 {claim}
               </Link>
             );
           },
-          sort: true,
         },
         {
           id: 'status',
           label: t('translation|Status'),
-          getter: volume => makePVStatusLabel(volume),
+          filterVariant: 'multi-select',
+          getValue: volume => volume.status?.phase,
+          render: volume => makePVStatusLabel(volume),
           gridTemplate: 0.3,
-          sort: true,
         },
+        'labels',
         'age',
       ]}
     />

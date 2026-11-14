@@ -9,13 +9,20 @@ apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
   name: {{ $fullName }}
+  namespace: {{ include "headlamp.namespace" . }}
   labels:
     {{- include "headlamp.labels" . | nindent 4 }}
+    {{- with .Values.ingress.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
+  {{- if .Values.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ingress.ingressClassName }} 
+  {{- end }}
   {{- if .Values.ingress.tls }}
   tls:
     {{- range .Values.ingress.tls }}
@@ -36,9 +43,26 @@ spec:
             pathType: {{ .type }}
             backend:
               service:
+                {{- $svc := dict }}
+                {{- with .backend }}
+                  {{- with .service }}
+                    {{- $svc = . }}
+                  {{- end }}
+                {{- end }}
+                {{- if $svc.name }}
+                name: {{ tpl $svc.name $ | trim | quote }}
+                {{- else }}
                 name: {{ $fullName }}
-                port: 
+                {{- end }}
+                port:
+                  {{- $port := $svc.port | default dict }}
+                  {{- if $port.number }}
+                  number: {{ $port.number }}
+                  {{- else if $port.name }}
+                  name: {{ $port.name }}
+                  {{- else }}
                   number: {{ $svcPort }}
+                  {{- end }}
           {{- end }}
     {{- end }}
 {{- end }}

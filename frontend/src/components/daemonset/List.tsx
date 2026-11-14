@@ -1,8 +1,25 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { useTranslation } from 'react-i18next';
 import { KubeContainer } from '../../lib/k8s/cluster';
 import DaemonSet from '../../lib/k8s/daemonSet';
-import { LightTooltip } from '../common';
+import { MetadataDictGrid } from '../common/Resource';
 import ResourceListView from '../common/Resource/ResourceListView';
+import LightTooltip from '../common/Tooltip/TooltipLight';
 
 export default function DaemonSetList() {
   const { t } = useTranslation(['glossary', 'translation']);
@@ -14,52 +31,49 @@ export default function DaemonSetList() {
       columns={[
         'name',
         'namespace',
+        'cluster',
         {
           id: 'pods',
           label: t('Pods'),
-          getter: daemonSet => daemonSet.status?.currentNumberScheduled || 0,
+          getValue: daemonSet => daemonSet.status?.currentNumberScheduled || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'currentPods',
           label: t('translation|Current'),
-          getter: daemonSet => daemonSet.status?.currentNumberScheduled || 0,
+          getValue: daemonSet => daemonSet.status?.currentNumberScheduled || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'desiredPods',
           label: t('translation|Desired', { context: 'pods' }),
-          getter: daemonSet => daemonSet.status?.desiredNumberScheduled || 0,
+          getValue: daemonSet => daemonSet.status?.desiredNumberScheduled || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'readyPods',
           label: t('translation|Ready'),
-          getter: daemonSet => daemonSet.status?.numberReady || 0,
+          getValue: daemonSet => daemonSet.status?.numberReady || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'nodeSelector',
           label: t('Node Selector'),
-          getter: daemonSet => {
-            const selectors = daemonSet.getNodeSelectors();
-            const nodeSelectorTooltip = selectors.join('\n');
-            const nodeSelectorText = selectors.join(', ');
-            return (
-              <LightTooltip title={nodeSelectorTooltip} interactive>
-                {nodeSelectorText}
-              </LightTooltip>
-            );
-          },
+          getValue: daemonSet => daemonSet.getNodeSelectors().join(', '),
+          render: daemonSet =>
+            daemonSet.spec?.template?.spec?.nodeSelector ? (
+              <MetadataDictGrid dict={daemonSet.spec.template.spec.nodeSelector} />
+            ) : null,
         },
         {
           id: 'containers',
           label: t('Containers'),
-          getter: daemonSet => {
+          getValue: daemonSet =>
+            daemonSet
+              .getContainers()
+              .map((c: KubeContainer) => c.name)
+              .join(', '),
+          render: daemonSet => {
             const containerNames = daemonSet.getContainers().map((c: KubeContainer) => c.name);
             const containerText = containerNames.join(', ');
             const containerTooltip = containerNames.join('\n');
@@ -73,7 +87,12 @@ export default function DaemonSetList() {
         {
           id: 'images',
           label: t('Images'),
-          getter: daemonSet => {
+          getValue: daemonSet =>
+            daemonSet
+              .getContainers()
+              .map((c: KubeContainer) => c.image)
+              .join(', '),
+          render: daemonSet => {
             const images = daemonSet.getContainers().map((c: KubeContainer) => c.image);
             const imageTooltip = images.join('\n');
             const imageText = images.join(', ');
@@ -84,6 +103,7 @@ export default function DaemonSetList() {
             );
           },
         },
+        'labels',
         'age',
       ]}
     />

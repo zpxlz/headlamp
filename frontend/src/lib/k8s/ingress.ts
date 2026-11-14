@@ -1,5 +1,22 @@
-import { apiFactoryWithNamespace } from './apiProxy';
-import { KubeObjectInterface, makeKubeObject } from './cluster';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { KubeObjectInterface } from './KubeObject';
+import { KubeObject } from './KubeObject';
+import type { KubeLoadBalancerIngress } from './service';
 
 interface LegacyIngressRule {
   host: string;
@@ -13,7 +30,7 @@ interface LegacyIngressRule {
 
 export interface IngressRule {
   host: string;
-  http: {
+  http?: {
     paths: {
       path: string;
       pathType?: string;
@@ -45,7 +62,7 @@ export interface IngressBackend {
 export interface KubeIngress extends KubeObjectInterface {
   spec: {
     ingressClassName?: string;
-    rules: IngressRule[] | LegacyIngressRule[];
+    rules?: IngressRule[] | LegacyIngressRule[];
     tls?: {
       hosts: string[];
       secretName: string;
@@ -66,22 +83,69 @@ export interface KubeIngress extends KubeObjectInterface {
     };
     [key: string]: any;
   };
+  status?: {
+    loadBalancer?: {
+      ingress?: KubeLoadBalancerIngress[];
+    };
+  };
 }
 
-class Ingress extends makeKubeObject<KubeIngress>('ingress') {
-  static apiEndpoint = apiFactoryWithNamespace(
-    ['networking.k8s.io', 'v1', 'ingresses'],
-    ['extensions', 'v1beta1', 'ingresses']
-  );
+class Ingress extends KubeObject<KubeIngress> {
+  static kind = 'Ingress';
+  static apiName = 'ingresses';
+  static apiVersion = ['networking.k8s.io/v1'];
+  static isNamespaced = true;
+
+  static getBaseObject(): KubeIngress {
+    const baseObject = super.getBaseObject() as KubeIngress;
+    baseObject.spec = {
+      rules: [
+        {
+          host: '',
+          http: {
+            paths: [
+              {
+                path: '',
+                backend: {
+                  service: {
+                    name: '',
+                    port: {
+                      number: 80,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+      tls: [
+        {
+          hosts: [],
+          secretName: '',
+        },
+      ],
+    };
+    return baseObject;
+  }
+
   // Normalized, cached rules.
   private cachedRules: IngressRule[] = [];
 
   get spec(): KubeIngress['spec'] {
-    return this.jsonData!.spec;
+    return this.jsonData.spec;
+  }
+
+  getAddresses(): string {
+    const ingressEntries = this.jsonData.status?.loadBalancer?.ingress ?? [];
+    return ingressEntries
+      .map(entry => entry.hostname || entry.ip)
+      .filter(Boolean)
+      .join(', ');
   }
 
   getHosts() {
-    return this.spec!.rules.map(({ host }) => host).join(' | ');
+    return this.spec.rules?.map(({ host }) => host).join(' | ');
   }
 
   getRules(): IngressRule[] {
@@ -92,43 +156,50 @@ class Ingress extends makeKubeObject<KubeIngress>('ingress') {
     const rules: IngressRule[] = [];
 
     this.spec!.rules?.forEach(({ http, host }) => {
-      const paths = http.paths.map(({ backend, path }) => {
-        if (!!(backend as LegacyIngressBackend).serviceName) {
-          return {
-            path,
-            backend: {
-              service: {
-                name: (backend as LegacyIngressBackend).serviceName,
-                port: {
-                  number: parseInt((backend as LegacyIngressBackend).servicePort, 10),
+      if (http) {
+        const paths = http.paths.map(pathEntry => {
+          const { backend, path } = pathEntry;
+          // pathType only exists on networking.k8s.io/v1 rules, so it stays undefined
+          // for the legacy shape. Carry it through either way: consumers rely on
+          // getRules() as the single normalized view of spec.rules.
+          const pathType = (pathEntry as { pathType?: string }).pathType;
+
+          if (!!(backend as LegacyIngressBackend).serviceName) {
+            return {
+              path,
+              pathType,
+              backend: {
+                service: {
+                  name: (backend as LegacyIngressBackend).serviceName,
+                  port: {
+                    number: parseInt((backend as LegacyIngressBackend).servicePort, 10),
+                  },
                 },
               },
-            },
-          };
-        } else {
-          return {
-            path,
-            backend: backend as IngressBackend,
-          };
-        }
-      });
+            };
+          } else {
+            return {
+              path,
+              pathType,
+              backend: backend as IngressBackend,
+            };
+          }
+        });
 
-      rules.push({
-        host,
-        http: { paths },
-      });
+        rules.push({
+          host,
+          http: { paths },
+        });
+      } else {
+        rules.push({
+          host,
+          http: { paths: [] },
+        });
+      }
     });
 
     this.cachedRules = rules;
     return rules;
-  }
-
-  static get listRoute() {
-    return 'ingresses';
-  }
-
-  static get pluralName() {
-    return 'ingresses';
   }
 }
 

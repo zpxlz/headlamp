@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { KubePod } from '../../lib/k8s/pod';
 
 const creationTimestamp = new Date('2022-01-01').toISOString();
@@ -58,6 +74,7 @@ const imgPullBackOff = {
   metadata: {
     ...basePod.metadata,
     name: 'imagepullbackoff',
+    uid: '124',
   },
   spec: {
     ...basePod.spec,
@@ -111,9 +128,18 @@ const imgPullBackOff = {
             message: 'Back-off pulling image "doesnotexist:nover"',
           },
         },
-        lastState: {},
+        lastState: {
+          terminated: {
+            exitCode: 1,
+            reason: 'ImagePullBackOff',
+            message: 'Back-off pulling image "doesnotexist:nover"',
+            startedAt: stateDate,
+            finishedAt: stateDate,
+            containerID: '1234abcd',
+          },
+        },
         ready: false,
-        restartCount: 0,
+        restartCount: 1,
         image: 'doesnotexist:nover',
         imageID: '',
         started: false,
@@ -127,6 +153,7 @@ const successful = {
   metadata: {
     ...basePod.metadata,
     name: 'successful',
+    uid: '125',
   },
   spec: {
     ...basePod.spec,
@@ -141,7 +168,7 @@ const successful = {
     restartPolicy: 'Never',
   },
   status: {
-    ...basePod.status,
+    startTime: stateDate,
     phase: 'Succeeded',
     conditions: [
       {
@@ -204,6 +231,7 @@ const initializing = {
   metadata: {
     ...basePod.metadata,
     name: 'initializing',
+    uid: '125',
   },
   spec: {
     ...basePod.spec,
@@ -324,6 +352,7 @@ const livenessFailed = {
   metadata: {
     ...basePod.metadata,
     name: 'liveness-http',
+    uid: '126',
   },
   spec: {
     ...basePod.spec,
@@ -427,6 +456,7 @@ const errorTerminated = {
   metadata: {
     ...basePod.metadata,
     name: 'terminated',
+    uid: '127',
   },
   spec: {
     ...basePod.spec,
@@ -504,6 +534,7 @@ const running = {
   metadata: {
     ...basePod.metadata,
     name: 'running',
+    uid: '128',
   },
   spec: {
     ...basePod.spec,
@@ -577,6 +608,7 @@ const nominatedNode = {
   metadata: {
     ...basePod.metadata,
     name: 'nominated-node',
+    uid: '129',
   },
   spec: {
     ...basePod.spec,
@@ -651,6 +683,7 @@ const readinessGate = {
   metadata: {
     ...basePod.metadata,
     name: 'readiness-gate',
+    uid: '130',
   },
   spec: {
     ...basePod.spec,
@@ -731,7 +764,7 @@ const readinessGate = {
 };
 
 // Exporting so these can be used for details views
-export const podList = [
+export const podList: KubePod[] = [
   imgPullBackOff,
   successful,
   initializing,
@@ -741,3 +774,32 @@ export const podList = [
   nominatedNode,
   readinessGate,
 ];
+
+export const podWithResourceClaims: KubePod = {
+  ...running,
+  metadata: { ...running.metadata, name: 'trainer-0', uid: 'trainer-0-uid' },
+  spec: {
+    ...running.spec,
+    resourceClaims: [
+      { name: 'shared', resourceClaimName: 'shared-gpu' },
+      { name: 'gpu', resourceClaimTemplateName: 'single-gpu' },
+      { name: 'scratch', resourceClaimTemplateName: 'scratch-nvme' },
+    ],
+    containers: running.spec.containers.map(container => ({
+      ...container,
+      resources: { claims: [{ name: 'shared' }, { name: 'gpu' }] },
+    })),
+  },
+  status: {
+    ...running.status,
+    resourceClaimStatuses: [{ name: 'gpu', resourceClaimName: 'trainer-0-gpu-x7k2q' }],
+    extendedResourceClaimStatus: {
+      resourceClaimName: 'trainer-0-extended-resources-p26fr',
+      requestMappings: running.spec.containers.map(container => ({
+        containerName: container.name,
+        resourceName: 'example.com/gpu',
+        requestName: 'container-0',
+      })),
+    },
+  },
+} as KubePod;

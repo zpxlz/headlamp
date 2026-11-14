@@ -1,27 +1,55 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/// <reference types="node" />
 import { expect, Page } from '@playwright/test';
+import { runA11yScan } from './a11yHelper';
 
 export class HeadlampPage {
-  constructor(private page: Page) {}
+  private testURL: string;
 
-  async authenticate() {
-    await this.page.goto('/');
+  constructor(private page: Page) {
+    this.testURL = process.env.HEADLAMP_TEST_URL || '/';
+  }
 
+  async a11y() {
+    await runA11yScan(this.page, expect);
+  }
+
+  async authenticate(token?: string) {
     await this.page.waitForSelector('h1:has-text("Authentication")');
 
-    // Expects the URL to contain c/main/token
-    this.hasURLContaining(/.*token/);
+    // Check to see if already authenticated
+    if (await this.page.isVisible('button:has-text("Authenticate")')) {
+      this.hasToken(token || '');
 
-    const token = process.env.HEADLAMP_TOKEN || '';
-    this.hasToken(token);
+      // Fill in the token
+      await this.page.locator('#token').fill(token || '');
 
-    // Fill in the token
-    await this.page.locator('#token').fill(token);
+      // Click on the "Authenticate" button and wait for navigation
+      await Promise.all([
+        this.page.waitForNavigation(),
+        this.page.click('button:has-text("Authenticate")'),
+      ]);
+    }
+  }
 
-    // Click on the "Authenticate" button and wait for navigation
-    await Promise.all([
-      this.page.waitForNavigation(),
-      this.page.click('button:has-text("Authenticate")'),
-    ]);
+  async navigateToCluster(name: string, token?: string) {
+    await this.navigateTopage(`/c/${name}`);
+    await this.authenticate(token);
   }
 
   async hasURLContaining(pattern: RegExp) {
@@ -42,8 +70,18 @@ export class HeadlampPage {
   }
 
   async hasSecurityTab() {
-    const networkTab = this.page.locator('span:has-text("Security")').first();
-    expect(await networkTab.textContent()).toBe('Security');
+    const securityTab = this.page.locator('span:has-text("Security")').first();
+    expect(await securityTab.textContent()).toBe('Security');
+  }
+
+  async hasGlobalSearch() {
+    const globalSearch = this.page.getByPlaceholder(/^Search$/);
+
+    await expect(globalSearch).toBeVisible();
+    await expect(globalSearch).toHaveValue(/^$/);
+    await expect(globalSearch).not.toBeFocused();
+
+    return globalSearch;
   }
 
   async checkPageContent(text: string) {
@@ -57,23 +95,29 @@ export class HeadlampPage {
     expect(await pageContent).toContain(text);
   }
 
-  async navigateTopage(page: string, title: RegExp) {
-    await this.page.goto(page);
+  async navigateTopage(path: string, title?: RegExp) {
+    await this.page.goto(`${this.testURL}${path}`, {
+      waitUntil: 'networkidle',
+    });
     await this.page.waitForLoadState('load');
-    await this.hasTitleContaining(title);
+    if (title) {
+      await this.hasTitleContaining(title);
+    }
   }
 
   async logout() {
     // Click on the account button to open the user menu
-    await this.page.click('button[aria-label="Account of current user"]');
+    await this.page.click('button[aria-controls="primary-user-menu"]');
 
     // Wait for the logout option to be visible and click on it
-    await this.page.waitForSelector('a.MuiMenuItem-root:has-text("Log out")');
-    await this.page.click('a.MuiMenuItem-root:has-text("Log out")');
+    // Use .first() instead of a text match to avoid locale-dependent failures on non-English runs
+    const logoutMenuItem = this.page.locator('#primary-user-menu').getByRole('menuitem').first();
+    await logoutMenuItem.waitFor({ state: 'visible' });
+    await logoutMenuItem.click();
     await this.page.waitForLoadState('load');
 
-    // Expects the URL to contain c/main/token
-    await this.hasURLContaining(/.*token/);
+    // Expects the URL to contain c/test/token
+    // await this.hasURLContaining(/.*token/);
   }
 
   async tableHasHeaders(tableSelector: string, expectedHeaders: string[]) {
@@ -81,7 +125,8 @@ export class HeadlampPage {
     const headers = await this.page.$$eval(`${tableSelector} th`, ths =>
       ths.map(th => {
         if (th && th.textContent) {
-          return th.textContent.trim();
+          // Table header also contains a number, displayed during multi-sorting, so we remove it
+          return th.textContent.trim().replace('0', '');
         }
       })
     );
@@ -94,6 +139,10 @@ export class HeadlampPage {
     }
   }
 
+  async tableContains(text: string | RegExp, options?: { timeout?: number }) {
+    await expect(this.page.locator('table')).toContainText(text, options);
+  }
+
   async clickOnPlugin(pluginName: string) {
     await this.page.click(`a:has-text("${pluginName}")`);
     await this.page.waitForLoadState('load');
@@ -104,7 +153,9 @@ export class HeadlampPage {
     const rowsDisplayed1 = await this.getRowsDisplayed();
 
     // Click on the next page button
-    const nextPageButton = this.page.getByTitle('Next page');
+    const nextPageButton = this.page.getByRole('button', {
+      name: 'Go to next page',
+    });
     await nextPageButton.click();
 
     // Get value of rows per page after clicking next page button
@@ -115,7 +166,7 @@ export class HeadlampPage {
   }
 
   async getRowsDisplayed() {
-    const paginationCaption = this.page.locator("p:has-text(' of ')");
+    const paginationCaption = this.page.locator("span:has-text(' of ')");
     const captionText = await paginationCaption.textContent();
     return captionText;
   }

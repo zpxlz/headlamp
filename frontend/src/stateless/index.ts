@@ -1,32 +1,84 @@
-import * as jsyaml from 'js-yaml';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import _ from 'lodash';
-import { request } from '../lib/k8s/apiProxy';
+import { addBackstageAuthHeaders } from '../helpers/addBackstageAuthHeaders';
+import { getHeadlampAPIHeaders } from '../helpers/getHeadlampAPIHeaders';
+import { request } from '../lib/k8s/api/v1/clusterRequests';
+import { JSON_HEADERS } from '../lib/k8s/api/v1/constants';
 import { Cluster } from '../lib/k8s/cluster';
 import { KubeconfigObject } from '../lib/k8s/kubeconfig';
 import { ConfigState, setStatelessConfig } from '../redux/configSlice';
 import store from '../redux/stores/store';
-
-let indexedDBtest: any;
-
-// Import 'fake-indexeddb' only in the testing environment
-if (process.env.NODE_ENV === 'test') {
-  import('fake-indexeddb')
-    .then(module => {
-      indexedDBtest = module.indexedDB;
-    })
-    .catch(error => {
-      console.error('Error importing fake-indexeddb:', error);
-    });
-}
+import { deleteClusterKubeconfig } from './deleteClusterKubeconfig';
+import { findKubeconfigByClusterName } from './findKubeconfigByClusterName';
+import { getUserIdFromLocalStorage } from './getUserIdFromLocalStorage';
+import { updateStatelessClusterKubeconfig } from './updateStatelessClusterKubeconfig';
 
 /**
  * ParsedConfig is the object that is fetched from the backend.
- * It has cluster information as keys. The values are the same as the KubeconfigObject.
+ * It contains a list of parsed cluster entries under the `clusters` field.
+ * Each item corresponds to a parsed cluster object used by stateless config state.
  * @see KubeconfigObject
  * @see fetchStatelessClusterKubeConfigs
  */
 interface ParsedConfig {
-  [prop: string]: Cluster[];
+  clusters?: Cluster[];
+}
+
+/**
+ * Converts parsed `/parseKubeConfig` response data into the redux stateless state shape.
+ *
+ * @param parsedConfig Parsed backend response that may include a `clusters` array.
+ * @returns Object with `statelessClusters` indexed by cluster name.
+ */
+export function toStatelessConfigState(parsedConfig: ParsedConfig | null | undefined) {
+  const statelessClusters: NonNullable<ConfigState['statelessClusters']> = {};
+
+  if (parsedConfig?.clusters && Array.isArray(parsedConfig.clusters)) {
+    parsedConfig.clusters.forEach((cluster: Cluster) => {
+      statelessClusters[cluster.name] = cluster;
+    });
+  }
+
+  return { statelessClusters };
+}
+
+/**
+ * Merges freshly parsed stateless clusters into the currently loaded stateless map.
+ *
+ * Existing clusters are preserved, and clusters with matching names are overwritten
+ * by the latest parsed values.
+ *
+ * @param currentStatelessClusters Current stateless cluster map from redux state.
+ * @param parsedConfig Newly parsed backend response.
+ * @returns Merged `statelessClusters` payload suitable for `setStatelessConfig`.
+ */
+export function mergeStatelessConfigState(
+  currentStatelessClusters: ConfigState['statelessClusters'],
+  parsedConfig: ParsedConfig | null | undefined
+) {
+  const nextState = toStatelessConfigState(parsedConfig);
+
+  return {
+    statelessClusters: {
+      ...(currentStatelessClusters || {}),
+      ...nextState.statelessClusters,
+    },
+  };
 }
 
 /**
@@ -39,7 +91,7 @@ interface ParsedConfig {
  * @see getStatelessClusterKubeConfigs
  * @see findKubeconfigByClusterName
  */
-interface DatabaseEvent extends Event {
+export interface DatabaseEvent extends Event {
   // target is the request that generated the event.
   target: IDBOpenDBRequest & {
     // result is the IndexedDB database. It is used to create the transaction and the object store.
@@ -55,7 +107,7 @@ interface DatabaseEvent extends Event {
  * @see getStatelessClusterKubeConfigs
  * @see findKubeconfigByClusterName
  */
-interface DatabaseErrorEvent extends Event {
+export interface DatabaseErrorEvent extends Event {
   // target is the request that generated the event.
   target: IDBOpenDBRequest & {
     // error is the error of the request.
@@ -72,7 +124,7 @@ interface DatabaseErrorEvent extends Event {
  * @see getStatelessClusterKubeConfigs
  * @see findKubeconfigByClusterName
  * */
-interface CursorSuccessEvent extends Event {
+export interface CursorSuccessEvent extends Event {
   // target is the request that generated the event.
   target: EventTarget & {
     // result is the cursor. It is used to iterate through the object store.
@@ -88,7 +140,7 @@ interface CursorSuccessEvent extends Event {
  * @see getStatelessClusterKubeConfigs
  * @see findKubeconfigByClusterName
  * **/
-function handleDatabaseUpgrade(event: DatabaseEvent) {
+export function handleDatabaseUpgrade(event: DatabaseEvent) {
   const db = event.target ? event.target.result : null;
   // Create the object store if it doesn't exist
   if (db && !db.objectStoreNames.contains('kubeconfigStore')) {
@@ -103,7 +155,7 @@ function handleDatabaseUpgrade(event: DatabaseEvent) {
  * @see findKubeconfigByClusterName
  * */
 
-function handleDataBaseError(event: DatabaseErrorEvent, reject: (reason?: any) => void) {
+export function handleDataBaseError(event: DatabaseErrorEvent, reject: (reason?: any) => void) {
   console.error(event.target ? event.target.error : 'An error occurred while opening IndexedDB');
   reject(event.target ? event.target.error : 'An error occurred while opening IndexedDB');
 }
@@ -117,10 +169,7 @@ function handleDataBaseError(event: DatabaseErrorEvent, reject: (reason?: any) =
  */
 export function storeStatelessClusterKubeconfig(kubeconfig: string): Promise<void> {
   return new Promise<void>(async (resolve, reject) => {
-    const request =
-      process.env.NODE_ENV === 'test'
-        ? indexedDBtest.open('kubeconfigs', 1)
-        : indexedDB.open('kubeconfigs', 1);
+    const request = indexedDB.open('kubeconfigs', 1) as any;
 
     // The onupgradeneeded event is fired when the database is created for the first time.
     request.onupgradeneeded = handleDatabaseUpgrade;
@@ -144,7 +193,7 @@ export function storeStatelessClusterKubeconfig(kubeconfig: string): Promise<voi
         // The onsuccess event is fired when the request has succeeded.
         // This is where you handle the results of the request.
         addRequest.onsuccess = function requestSuccess() {
-          console.log('Kubeconfig added to IndexedDB');
+          console.debug('Kubeconfig added to IndexedDB');
           resolve(); // Resolve the promise when the kubeconfig is successfully added
         };
 
@@ -175,10 +224,7 @@ export function storeStatelessClusterKubeconfig(kubeconfig: string): Promise<voi
  */
 export function getStatelessClusterKubeConfigs(): Promise<string[]> {
   return new Promise<string[]>(async (resolve, reject) => {
-    const request =
-      process.env.NODE_ENV === 'test'
-        ? indexedDBtest.open('kubeconfigs', 1)
-        : indexedDB.open('kubeconfigs', 1);
+    const request = indexedDB.open('kubeconfigs', 1) as any;
 
     // The onupgradeneeded event is fired when the database is created for the first time.
     request.onupgradeneeded = handleDatabaseUpgrade;
@@ -225,88 +271,96 @@ export function getStatelessClusterKubeConfigs(): Promise<string[]> {
 }
 
 /**
- * Finds a kubeconfig by cluster name.
- * @param clusterName
- * @returns A promise that resolves with the kubeconfig, or null if not found.
- * @throws Error if IndexedDB is not supported.
- * @throws Error if the kubeconfig is invalid.
+ * Finds the kubeconfig and context with the matching cluster name or custom name in headlamp_info.
+ * @param clusterID The ID for a cluster, composed of the kubeconfig path and cluster name
+ * @param clusterName The name of the cluster to find.
+ * @param parsedKubeconfig The parsed kubeconfig object.
+ * @returns An object containing the matching kubeconfig and context.
  */
-export function findKubeconfigByClusterName(clusterName: string): Promise<string | null> {
-  return new Promise<string | null>(async (resolve, reject) => {
-    try {
-      const request =
-        process.env.NODE_ENV === 'test'
-          ? indexedDBtest.open('kubeconfigs', 1)
-          : indexedDB.open('kubeconfigs', 1);
+export function findMatchingContexts(
+  clusterName: string,
+  parsedKubeconfig: KubeconfigObject,
+  clusterID?: string
+) {
+  let matchingContext;
+  let matchingKubeconfig;
 
-      // The onupgradeneeded event is fired when the database is created for the first time.
-      request.onupgradeneeded = handleDatabaseUpgrade;
+  // Note: currently clusterID is being used for non dynamic clusters only
+  if (clusterID) {
+    // Find source for the kubeconfig
+    const source = parsedKubeconfig.contexts.find(
+      context => context.context.clusterID === clusterID
+    )?.context.source;
 
-      // The onsuccess event is fired when the database is opened.
-      // This event is where you specify the actions to take when the database is opened.
-      request.onsuccess = function handleDatabaseSuccess(event: DatabaseEvent) {
-        const db = event.target.result;
-        const transaction = db.transaction(['kubeconfigStore'], 'readonly');
-        const store = transaction.objectStore('kubeconfigStore');
-
-        // The onsuccess event is fired when the request has succeeded.
-        // This is where you handle the results of the request.
-        // The result is the cursor. It is used to iterate through the object store.
-        // The cursor is null when there are no more objects to iterate through.
-        // The cursor is used to find the kubeconfig by cluster name.
-        store.openCursor().onsuccess = function storeSuccess(event: Event) {
-          const successEvent = event as CursorSuccessEvent;
-          const cursor = successEvent.target.result;
-          if (cursor) {
-            const kubeconfigObject = cursor.value;
-            const kubeconfig = kubeconfigObject.kubeconfig;
-
-            const parsedKubeconfig = jsyaml.load(atob(kubeconfig)) as KubeconfigObject;
-
-            const matchingKubeconfig = parsedKubeconfig.clusters.find(
-              cluster => cluster.name === clusterName
-            );
-
-            if (matchingKubeconfig) {
-              resolve(kubeconfig);
-            } else {
-              cursor.continue();
-            }
-          } else {
-            resolve(null); // No matching kubeconfig found
-          }
-        };
-      };
-
-      // The onerror event is fired when the database is opened.
-      // This is where you handle errors.
-      request.onerror = handleDataBaseError;
-    } catch (error) {
-      reject(error);
+    // Find the context with the matching clusterID
+    if (source === 'kubeconfig') {
+      matchingKubeconfig = parsedKubeconfig.contexts.find(
+        context => context.context.clusterID === clusterID
+      );
     }
-  });
+  } else {
+    // Find the context with the matching cluster name or custom name in headlamp_info
+    matchingContext = parsedKubeconfig.contexts.find(
+      context =>
+        context.name === clusterName ||
+        context.context.extensions?.find(extension => extension.name === 'headlamp_info')?.extension
+          .customName === clusterName
+    );
+
+    matchingKubeconfig = parsedKubeconfig.contexts.find(context => context.name === clusterName);
+  }
+
+  return { matchingKubeconfig, matchingContext };
 }
 
 /**
- * In the backend we use a unique ID to identify a user. If there is no ID in localStorage
- * we generate a new one and store it in localStorage. We then combine it with the
- * cluster name and this headlamp-userId to create a unique ID for a cluster. If we don't
- * do it then if 2 different users have a cluster with the same name, then the
- * proxy will be overwritten.
- * @returns headlamp-userId from localStorage
+ * Finds and replaces a kubeconfig by cluster name.
+ * @param clusterName - The name of the cluster to find and replace.
+ * @param kubeconfig - The base64 encoded kubeconfig to replace the existing one with.
+ * @param create - If true, create a new kubeconfig if it doesn't exist. If false, only replace existing kubeconfigs.
+ * @returns A promise that resolves when the kubeconfig is successfully replaced.
+ * @throws Error if the kubeconfig replacement fails at any step.
+ *
+ * Note: If deletion of the existing kubeconfig fails, the operation will still proceed
+ * to store the new kubeconfig. This ensures the new configuration is applied even if
+ * cleanup of the old one encounters issues.
  */
-export function getUserIdFromLocalStorage(): string {
-  let headlampUserId = localStorage.getItem('headlamp-userId');
+export async function findAndReplaceKubeconfig(
+  clusterName: string,
+  kubeconfig: string,
+  create: boolean = false
+): Promise<void> {
+  try {
+    // First try to find the existing kubeconfig
+    const existingKubeconfig = await findKubeconfigByClusterName(clusterName);
 
-  if (!headlampUserId) {
-    headlampUserId = generateSecureToken();
-
-    if (headlampUserId) {
-      localStorage.setItem('headlamp-userId', headlampUserId);
+    if (existingKubeconfig) {
+      // If found, delete the old one
+      // Note: If deletion fails, we continue with storing the new kubeconfig
+      // to ensure the new configuration is applied
+      try {
+        await deleteClusterKubeconfig(clusterName);
+      } catch (deleteError) {
+        console.warn(
+          `Failed to delete existing kubeconfig for cluster ${clusterName}, but continuing with replacement:`,
+          deleteError
+        );
+      }
+      // Store the new kubeconfig
+      await storeStatelessClusterKubeconfig(kubeconfig);
+    } else if (create) {
+      // If not found and create is true, store the new kubeconfig
+      await storeStatelessClusterKubeconfig(kubeconfig);
+    } else {
+      // If not found and create is false, throw error
+      throw new Error(
+        `No existing kubeconfig found for cluster ${clusterName} and create is false`
+      );
     }
+  } catch (error) {
+    console.error('Error in findAndReplaceKubeconfig:', error);
+    throw error;
   }
-
-  return headlampUserId!;
 }
 
 /**
@@ -314,9 +368,9 @@ export function getUserIdFromLocalStorage(): string {
  * @param {number} length - The length of the token.
  * @returns {string} - The generated token.
  */
-function generateSecureToken(length = 16): string {
+export function generateSecureToken(length = 16): string {
   const buffer = new Uint8Array(length);
-  if (process.env.NODE_ENV === 'test') {
+  if (import.meta.env.NODE_ENV === 'test') {
     // Use Math.random() in the testing environment
     return Array.from(buffer, () => Math.floor(Math.random() * 16).toString(16)).join('');
   }
@@ -330,47 +384,31 @@ function generateSecureToken(length = 16): string {
  * Compares the cluster config from the backend and the redux store
  * @param clusters
  * @param clustersToConfig
- * @param isStateless
  * @returns true if the present stored config is different from the fetched one.
  */
-export function processClusterComparison(
-  clusters: ConfigState['clusters'],
-  clustersToConfig: ConfigState['clusters'],
-  isStateless: boolean
-) {
-  if (!clusters) {
-    // If no clusters, then add all clusters
-    return false;
+export function isEqualClusterConfigs(
+  currentConfig: ConfigState['clusters'],
+  newConfig: ConfigState['clusters']
+): boolean {
+  if (!currentConfig || !newConfig) {
+    return true; // Config is different if either is null/undefined
   }
 
-  if (!clustersToConfig) {
-    // If no clustersToConfig, then delete all clusters
-    return true;
+  const currentKeys = Object.keys(currentConfig);
+  const newKeys = Object.keys(newConfig);
+
+  if (currentKeys.length !== newKeys.length) {
+    return true; // Different number of clusters
   }
 
-  let isConfigDifferent = false;
-
-  Object.keys(clustersToConfig).forEach(key => {
-    if (!!clusters[key]) {
-      let clusterToCompare = clusters[key];
-
-      if (clusterToCompare.useToken !== undefined) {
-        clusterToCompare = _.cloneDeep(clusters[key]);
-        delete clusterToCompare.useToken;
-      }
-
-      if (isStateless) {
-        if (_.isEqual(clustersToConfig[key], clusterToCompare)) {
-          delete clusters[key];
-        }
-      } else {
-        isConfigDifferent =
-          isConfigDifferent || !_.isEqual(clustersToConfig[key], clusterToCompare);
-      }
+  return currentKeys.some(key => {
+    if (!newConfig[key]) {
+      return true; // Cluster in current config doesn't exist in new config
     }
+    const currentCluster = _.omit(currentConfig[key], ['useToken']);
+    const newCluster = _.omit(newConfig[key], ['useToken']);
+    return !_.isEqual(currentCluster, newCluster);
   });
-
-  return isConfigDifferent;
 }
 
 /**
@@ -379,39 +417,39 @@ export function processClusterComparison(
  */
 export async function fetchStatelessClusterKubeConfigs(dispatch: any) {
   const config = await getStatelessClusterKubeConfigs();
-  const statelessClusters = store.getState().config.statelessClusters;
-  const JSON_HEADERS = { Accept: 'application/json', 'Content-Type': 'application/json' };
+
+  if (!config || config.length === 0) {
+    const statelessClusters = store.getState().config.statelessClusters;
+    if (statelessClusters && Object.keys(statelessClusters).length > 0) {
+      dispatch(setStatelessConfig({ statelessClusters: {} }));
+    }
+    return;
+  }
+
+  const headers = addBackstageAuthHeaders(JSON_HEADERS);
   const clusterReq = {
     kubeconfigs: config,
   };
 
-  // Parses statelessCluster config
-  request(
+  return request(
     '/parseKubeConfig',
     {
       method: 'POST',
       body: JSON.stringify(clusterReq),
       headers: {
-        ...JSON_HEADERS,
+        ...headers,
+        ...getHeadlampAPIHeaders(),
       },
     },
     false,
     false
   )
     .then((config: ParsedConfig) => {
-      const clustersToConfig: ConfigState['statelessClusters'] = {};
-      config?.clusters.forEach((cluster: Cluster) => {
-        clustersToConfig[cluster.name] = cluster;
-      });
+      const nextState = toStatelessConfigState(config);
+      const statelessClusters = store.getState().config.statelessClusters;
 
-      const configToStore = {
-        ...config,
-        statelessClusters: clustersToConfig,
-      };
-      if (statelessClusters === null) {
-        dispatch(setStatelessConfig({ ...configToStore }));
-      } else if (Object.keys(clustersToConfig).length !== Object.keys(statelessClusters).length) {
-        dispatch(setStatelessConfig({ ...configToStore }));
+      if (isEqualClusterConfigs(statelessClusters, nextState.statelessClusters)) {
+        dispatch(setStatelessConfig(nextState));
       }
     })
     .catch((err: Error) => {
@@ -419,84 +457,17 @@ export async function fetchStatelessClusterKubeConfigs(dispatch: any) {
     });
 }
 
-/**
- * deleteClusterKubeconfig deletes the kubeconfig for a stateless cluster from indexedDB
- * @param clusterName - The name of the cluster
- * @returns A promise that resolves with the kubeconfig, or null if not found.
- */
-export async function deleteClusterKubeconfig(clusterName: string): Promise<string | null> {
-  return new Promise<string | null>(async (resolve, reject) => {
-    try {
-      const request =
-        process.env.NODE_ENV === 'test'
-          ? indexedDBtest.open('kubeconfigs', 1)
-          : indexedDB.open('kubeconfigs', 1);
-
-      // The onupgradeneeded event is fired when the database is created for the first time.
-      request.onupgradeneeded = handleDatabaseUpgrade;
-
-      // The onsuccess event is fired when the database is opened.
-      // This event is where you specify the actions to take when the database is opened.
-      request.onsuccess = function handleDatabaseSuccess(event: DatabaseEvent) {
-        const db = event.target.result;
-        const transaction = db.transaction(['kubeconfigStore'], 'readwrite');
-        const store = transaction.objectStore('kubeconfigStore');
-
-        // The onsuccess event is fired when the request has succeeded.
-        // This is where you handle the results of the request.
-        // The result is the cursor. It is used to iterate through the object store.
-        // The cursor is null when there are no more objects to iterate through.
-        // The cursor is used to find the kubeconfig by cluster name.
-        store.openCursor().onsuccess = function storeSuccess(event: Event) {
-          // delete the kubeconfig by cluster name
-          const successEvent = event as CursorSuccessEvent;
-          const cursor = successEvent.target.result;
-          if (cursor) {
-            const kubeconfigObject = cursor.value;
-            const kubeconfig = kubeconfigObject.kubeconfig;
-
-            const parsedKubeconfig = jsyaml.load(atob(kubeconfig)) as KubeconfigObject;
-
-            const matchingKubeconfig = parsedKubeconfig.clusters.find(
-              cluster => cluster.name === clusterName
-            );
-
-            if (matchingKubeconfig) {
-              const deleteRequest = store.delete(cursor.key);
-              deleteRequest.onsuccess = () => {
-                console.log('Kubeconfig deleted from IndexedDB');
-                resolve(kubeconfig);
-              };
-              deleteRequest.onerror = () => {
-                console.error('Error deleting kubeconfig from IndexedDB');
-                reject('Error deleting kubeconfig from IndexedDB');
-              };
-            } else {
-              cursor.continue();
-            }
-          } else {
-            resolve(null); // No matching kubeconfig found
-          }
-        };
-      };
-
-      // The onerror event is fired when the database is opened.
-      // This is where you handle errors.
-      request.onerror = handleDataBaseError;
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
 const exportFunctions = {
   storeStatelessClusterKubeconfig,
   getStatelessClusterKubeConfigs,
   findKubeconfigByClusterName,
   getUserIdFromLocalStorage,
-  processClusterComparison,
+  isEqualClusterConfigs,
   fetchStatelessClusterKubeConfigs,
   deleteClusterKubeconfig,
+  updateStatelessClusterKubeconfig,
+  // @deprecated - use isEqualClusterConfigs instead
+  processClusterComparison: isEqualClusterConfigs,
 };
 
 export default exportFunctions;

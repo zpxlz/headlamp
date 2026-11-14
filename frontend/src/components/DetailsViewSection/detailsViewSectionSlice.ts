@@ -1,6 +1,23 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { get, set } from 'lodash';
-import { KubeObject } from '../../lib/k8s/cluster';
+import { createContext, ReactNode } from 'react';
+import type { KubeObject } from '../../lib/k8s/KubeObject';
 import { DetailsViewSectionType } from './DetailsViewSection';
 
 export type DetailsViewSection = {
@@ -18,10 +35,13 @@ export enum DefaultDetailsViewSection {
   CHILDREN = 'CHILDREN',
 }
 
+/** Set to true when resource details render in a side panel rather than a full page, to omit the back link. */
+export const DetailsGridContext = createContext<{ isInPanel?: boolean }>({});
+
 type HeaderActionFuncType = (
   resource: KubeObject | null,
-  sections: DetailsViewSection[]
-) => DetailsViewSection[];
+  sections: (DetailsViewSection | ReactNode)[]
+) => (DetailsViewSection | ReactNode)[];
 
 export type DetailsViewsSectionProcessor = {
   id: string;
@@ -111,7 +131,7 @@ const detailsViewSectionSlice = createSlice({
       let section = action.payload as DetailsViewSection;
       if (section.id === undefined) {
         if (section.section === undefined) {
-          section = { id: '', section: section };
+          section = { id: '', section: section as unknown as DetailsViewSectionType };
         } else {
           section = { id: '', section: section.section };
         }

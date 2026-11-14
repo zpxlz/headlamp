@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import {
   DefaultDetailsViewSection,
   DetailsViewDefaultHeaderActions,
@@ -42,15 +58,30 @@ registerDetailsViewSectionsProcessor(function addSubheaderSection(resource, sect
 
   // Check if we already have added our custom section (this function may be called multiple times).
   const customSectionId = 'my-custom-section';
-  if (sections.findIndex(section => section.id === customSectionId) !== -1) {
+  const isCustomSectionId =
+    sections.findIndex(section => {
+      return (
+        typeof section === 'object' &&
+        section !== null &&
+        'id' in section &&
+        section.id === customSectionId
+      );
+    }) !== -1;
+  if (isCustomSectionId) {
     return sections;
   }
 
-  const detailsHeaderIdx = sections.findIndex(
-    section => section.id === DefaultDetailsViewSection.MAIN_HEADER
-  );
-  // There is no header, so we do nothing.
-  if (detailsHeaderIdx === -1) {
+  const detailsHeaderIdx = sections.findIndex(section => {
+    return (
+      typeof section === 'object' &&
+      section !== null &&
+      'id' in section &&
+      section.id === DefaultDetailsViewSection.MAIN_HEADER
+    );
+  });
+  const isNoMainHeader = detailsHeaderIdx === -1;
+  if (isNoMainHeader) {
+    // There is no header, so we do nothing.
     return sections;
   }
 

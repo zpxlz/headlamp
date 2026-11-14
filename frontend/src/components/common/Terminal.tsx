@@ -1,18 +1,43 @@
-import 'xterm/css/xterm.css';
-import { Box } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import '@xterm/xterm/css/xterm.css';
+import { Icon } from '@iconify/react';
+import Box from '@mui/material/Box';
 import { DialogProps } from '@mui/material/Dialog';
 import DialogContent from '@mui/material/DialogContent';
 import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
+import { useTheme } from '@mui/material/styles';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal as XTerminal } from '@xterm/xterm';
 import _ from 'lodash';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Terminal as XTerminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
+import { isElectron } from '../../helpers/isElectron';
+import { getDefaultContainer, resolveContainerName } from '../../helpers/podContainer';
 import Pod from '../../lib/k8s/pod';
 import { Dialog } from './Dialog';
+import { getXtermTheme } from './xtermTheme';
 
 const decoder = new TextDecoder('utf-8');
 const encoder = new TextEncoder();
@@ -28,7 +53,10 @@ enum Channel {
 interface TerminalProps extends DialogProps {
   item: Pod;
   isAttach?: boolean;
+  /** Don't render the terminal in the dialog */
+  noDialog?: boolean;
   onClose?: () => void;
+  initialContainer?: string;
 }
 
 interface XTerminalConnected {
@@ -40,9 +68,11 @@ interface XTerminalConnected {
 type execReturn = ReturnType<Pod['exec']>;
 
 export default function Terminal(props: TerminalProps) {
-  const { item, onClose, isAttach, ...other } = props;
+  const { item, onClose, isAttach, noDialog, initialContainer, ...other } = props;
   const [terminalContainerRef, setTerminalContainerRef] = React.useState<HTMLElement | null>(null);
-  const [container, setContainer] = useState<string | null>(getDefaultContainer());
+  const [container, setContainer] = useState<string | null>(() =>
+    resolveContainerName(item, initialContainer)
+  );
   const execOrAttachRef = React.useRef<execReturn | null>(null);
   const fitAddonRef = React.useRef<FitAddon | null>(null);
   const xtermRef = React.useRef<XTerminalConnected | null>(null);
@@ -50,11 +80,17 @@ export default function Terminal(props: TerminalProps) {
     available: getAvailableShells(),
     currentIdx: 0,
   });
+  const [contextMenu, setContextMenu] = React.useState<{
+    mouseX: number;
+    mouseY: number;
+    hasSelection: boolean;
+    canPaste: boolean;
+  } | null>(null);
   const { t } = useTranslation(['translation', 'glossary']);
-
-  function getDefaultContainer() {
-    return item.spec.containers.length > 0 ? item.spec.containers[0].name : '';
-  }
+  const muiTheme = useTheme();
+  const xtermTheme = React.useMemo(() => getXtermTheme(muiTheme), [muiTheme]);
+  const isMobile = useMediaQuery(muiTheme.breakpoints.down('sm'));
+  const isDesktopApp = isElectron();
 
   // @todo: Give the real exec type when we have it.
   function setupTerminal(containerRef: HTMLElement, xterm: XTerminal, fitAddon: FitAddon) {
@@ -63,9 +99,25 @@ export default function Terminal(props: TerminalProps) {
     }
 
     xterm.open(containerRef);
+    xterm.focus();
 
+    let lastKeyPressEvent: KeyboardEvent | null = null;
     xterm.onData(data => {
-      send(0, data);
+      let dataToSend = data;
+
+      // On MacOS with a German layout, the Alt+7 should yield a | character, but
+      // the onData event doesn't get it. So we need to add a custom key handler.
+      // No need to check for the actual platform because the key patterns should
+      // be good enough.
+      if (
+        data === '\u001b7' &&
+        lastKeyPressEvent?.key === '|' &&
+        lastKeyPressEvent.code === 'Digit7'
+      ) {
+        dataToSend = '|';
+      }
+
+      send(0, dataToSend);
     });
 
     xterm.onResize(size => {
@@ -74,6 +126,12 @@ export default function Terminal(props: TerminalProps) {
 
     // Allow copy/paste in terminal
     xterm.attachCustomKeyEventHandler(arg => {
+      if (arg.type === 'keydown') {
+        lastKeyPressEvent = arg;
+      } else {
+        lastKeyPressEvent = null;
+      }
+
       if (arg.ctrlKey && arg.type === 'keydown') {
         if (arg.code === 'KeyC') {
           const selection = xterm.getSelection();
@@ -104,7 +162,10 @@ export default function Terminal(props: TerminalProps) {
   }
 
   function send(channel: number, data: string) {
-    const socket = execOrAttachRef.current!.getSocket();
+    if (!execOrAttachRef.current) {
+      return;
+    }
+    const socket = execOrAttachRef.current.getSocket();
 
     // We should only send data if the socket is ready.
     if (!socket || socket.readyState !== 1) {
@@ -119,6 +180,7 @@ export default function Terminal(props: TerminalProps) {
   }
 
   function onData(xtermc: XTerminalConnected, bytes: ArrayBuffer) {
+    if (!execOrAttachRef.current) return;
     const xterm = xtermc.xterm;
     // Only show data from stdout, stderr and server error channel.
     const channel: Channel = new Int8Array(bytes.slice(0, 1))[0];
@@ -215,6 +277,12 @@ export default function Terminal(props: TerminalProps) {
     }
   }
 
+  React.useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.xterm.options.theme = xtermTheme;
+    }
+  }, [xtermTheme]);
+
   React.useEffect(
     () => {
       // We need a valid container ref for the terminal to add itself to it.
@@ -246,6 +314,8 @@ export default function Terminal(props: TerminalProps) {
           scrollback: 10000,
           rows: 30, // initial rows before fit
           windowsMode: isWindows,
+          allowProposedApi: true,
+          theme: xtermTheme,
         }),
         connected: false,
         reconnectOnEnter: false,
@@ -262,7 +332,7 @@ export default function Terminal(props: TerminalProps) {
 
           execOrAttachRef.current = await item.attach(
             container,
-            (items: ArrayBuffer) => onData(xtermRef.current!, items),
+            items => onData(xtermRef.current!, items),
             { failCb: () => shellConnectFailed(xtermRef.current!) }
           );
         } else {
@@ -272,7 +342,7 @@ export default function Terminal(props: TerminalProps) {
 
           execOrAttachRef.current = await item.exec(
             container,
-            (items: ArrayBuffer) => onData(xtermRef.current!, items),
+            items => onData(xtermRef.current!, items),
             { command: [command], failCb: () => shellConnectFailed(xtermRef.current!) }
           );
         }
@@ -288,6 +358,7 @@ export default function Terminal(props: TerminalProps) {
       return function cleanup() {
         xtermRef.current?.xterm.dispose();
         execOrAttachRef.current?.cancel();
+        execOrAttachRef.current = null;
         window.removeEventListener('resize', handler);
       };
     },
@@ -298,7 +369,7 @@ export default function Terminal(props: TerminalProps) {
   React.useEffect(
     () => {
       if (props.open && container === null) {
-        setContainer(getDefaultContainer());
+        setContainer(getDefaultContainer(item));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,6 +383,7 @@ export default function Terminal(props: TerminalProps) {
         currentIdx: 0,
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item]);
 
   function getAvailableShells() {
@@ -329,6 +401,53 @@ export default function Terminal(props: TerminalProps) {
     setContainer(event.target.value);
   }
 
+  function canPasteIntoTerminal() {
+    const socket = execOrAttachRef.current?.getSocket();
+
+    return !!socket && socket.readyState === 1;
+  }
+
+  const handleContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const hasSelection = !!xtermRef.current?.xterm.getSelection();
+    setContextMenu({
+      mouseX: event.clientX + 2,
+      mouseY: event.clientY - 6,
+      hasSelection,
+      canPaste: canPasteIntoTerminal(),
+    });
+  };
+
+  const handleContextMenuClose = () => {
+    setContextMenu(null);
+  };
+
+  const handleCopy = async () => {
+    if (xtermRef.current) {
+      const selection = xtermRef.current.xterm.getSelection();
+      if (selection) {
+        try {
+          await navigator.clipboard.writeText(selection);
+        } catch (err) {
+          console.error('Failed to copy text: ', err);
+        }
+      }
+    }
+    handleContextMenuClose();
+  };
+
+  const handlePaste = async () => {
+    if (xtermRef.current && canPasteIntoTerminal()) {
+      try {
+        const text = await navigator.clipboard.readText();
+        xtermRef.current.xterm.paste(text);
+      } catch (err) {
+        console.error('Failed to paste text: ', err);
+      }
+    }
+    handleContextMenuClose();
+  };
+
   function isSuccessfulExitError(channel: number, text: string): boolean {
     // Linux container Error
     if (channel === 3) {
@@ -337,7 +456,13 @@ export default function Terminal(props: TerminalProps) {
         if (_.isEmpty(error.metadata) && error.status === 'Success') {
           return true;
         }
-      } catch {}
+      } catch (e) {
+        console.debug('Terminal: failed to parse server error channel data', {
+          channel,
+          text,
+          error: e,
+        });
+      }
     }
     return false;
   }
@@ -350,7 +475,13 @@ export default function Terminal(props: TerminalProps) {
         if (error.code === 500 && error.status === 'Failure' && error.reason === 'InternalError') {
           return true;
         }
-      } catch {}
+      } catch (e) {
+        console.debug('Terminal: failed to parse server error channel data', {
+          channel,
+          text,
+          error: e,
+        });
+      }
     }
     // Windows container Error
     if (channel === 1) {
@@ -361,6 +492,127 @@ export default function Terminal(props: TerminalProps) {
     return false;
   }
 
+  const content = (
+    <DialogContent
+      sx={theme => ({
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        ...(isMobile && {
+          padding: 0,
+        }),
+        '& .xterm ': {
+          height: '100vh', // So the terminal doesn't stay shrunk when shrinking vertically and maximizing again.
+          '& .xterm-viewport': {
+            width: 'initial !important', // BugFix: https://github.com/xtermjs/xterm.js/issues/3564#issuecomment-1004417440
+          },
+        },
+        '& #xterm-container': {
+          overflow: 'hidden',
+          width: '100%',
+          '& .terminal.xterm': {
+            padding: isMobile ? 0 : theme.spacing(1),
+          },
+        },
+      })}
+    >
+      <Box sx={isMobile ? { px: 1, pt: 1 } : undefined}>
+        <FormControl sx={{ minWidth: '11rem' }}>
+          <InputLabel shrink id="container-name-chooser-label">
+            {t('glossary|Container')}
+          </InputLabel>
+          <Select
+            labelId="container-name-chooser-label"
+            id="container-name-chooser"
+            value={container !== null ? container : getDefaultContainer(item)}
+            onChange={handleContainerChange}
+          >
+            {item?.spec?.containers && (
+              <MenuItem disabled value="">
+                {t('glossary|Containers')}
+              </MenuItem>
+            )}
+            {item?.spec?.containers.map(({ name }) => (
+              <MenuItem value={name} key={name}>
+                {name}
+              </MenuItem>
+            ))}
+            {item?.spec?.initContainers && (
+              <MenuItem disabled value="">
+                {t('translation|Init Containers')}
+              </MenuItem>
+            )}
+            {item.spec.initContainers?.map(({ name }) => (
+              <MenuItem value={name} key={`init_container_${name}`}>
+                {name}
+              </MenuItem>
+            ))}
+            {item?.spec?.ephemeralContainers && (
+              <MenuItem disabled value="">
+                {t('glossary|Ephemeral Containers')}
+              </MenuItem>
+            )}
+            {item.spec.ephemeralContainers?.map(({ name }) => (
+              <MenuItem value={name} key={`eph_container_${name}`}>
+                {name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Box>
+      <Box
+        sx={theme => ({
+          paddingTop: theme.spacing(1),
+          flex: 1,
+          width: '100%',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column-reverse',
+        })}
+      >
+        <div
+          id="xterm-container"
+          ref={x => setTerminalContainerRef(x)}
+          onContextMenu={isDesktopApp ? handleContextMenu : undefined}
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column-reverse',
+          }}
+        />
+        {isDesktopApp && (
+          <Menu
+            open={contextMenu !== null}
+            onClose={handleContextMenuClose}
+            anchorReference="anchorPosition"
+            anchorPosition={
+              contextMenu !== null
+                ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
+                : undefined
+            }
+          >
+            <MenuItem onClick={handleCopy} disabled={!contextMenu?.hasSelection}>
+              <ListItemIcon>
+                <Icon icon="mdi:content-copy" />
+              </ListItemIcon>
+              <ListItemText>{t('translation|Copy')}</ListItemText>
+            </MenuItem>
+            <MenuItem onClick={handlePaste} disabled={!contextMenu?.canPaste}>
+              <ListItemIcon>
+                <Icon icon="mdi:content-paste" />
+              </ListItemIcon>
+              <ListItemText>{t('translation|Paste')}</ListItemText>
+            </MenuItem>
+          </Menu>
+        )}
+      </Box>
+    </DialogContent>
+  );
+
+  if (noDialog) {
+    return content;
+  }
+
   return (
     <Dialog
       onClose={onClose}
@@ -369,7 +621,6 @@ export default function Terminal(props: TerminalProps) {
           fitAddonRef.current!.fit();
         }, 1);
       }}
-      keepMounted
       withFullScreen
       title={
         isAttach
@@ -378,87 +629,7 @@ export default function Terminal(props: TerminalProps) {
       }
       {...other}
     >
-      <DialogContent
-        sx={{
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          '& .xterm ': {
-            height: '100vh', // So the terminal doesn't stay shrunk when shrinking vertically and maximizing again.
-            '& .xterm-viewport': {
-              width: 'initial !important', // BugFix: https://github.com/xtermjs/xterm.js/issues/3564#issuecomment-1004417440
-            },
-          },
-          '& #xterm-container': {
-            overflow: 'hidden',
-            width: '100%',
-            '& .terminal.xterm': {
-              padding: 10,
-            },
-          },
-        }}
-      >
-        <Box>
-          <FormControl sx={{ minWidth: '11rem' }}>
-            <InputLabel shrink id="container-name-chooser-label">
-              {t('glossary|Container')}
-            </InputLabel>
-            <Select
-              labelId="container-name-chooser-label"
-              id="container-name-chooser"
-              value={container !== null ? container : getDefaultContainer()}
-              onChange={handleContainerChange}
-            >
-              {item?.spec?.containers && (
-                <MenuItem disabled value="">
-                  {t('glossary|Containers')}
-                </MenuItem>
-              )}
-              {item?.spec?.containers.map(({ name }) => (
-                <MenuItem value={name} key={name}>
-                  {name}
-                </MenuItem>
-              ))}
-              {item?.spec?.initContainers && (
-                <MenuItem disabled value="">
-                  {t('translation|Init Containers')}
-                </MenuItem>
-              )}
-              {item.spec.initContainers?.map(({ name }) => (
-                <MenuItem value={name} key={`init_container_${name}`}>
-                  {name}
-                </MenuItem>
-              ))}
-              {item?.spec?.ephemeralContainers && (
-                <MenuItem disabled value="">
-                  {t('glossary|Ephemeral Containers')}
-                </MenuItem>
-              )}
-              {item.spec.ephemeralContainers?.map(({ name }) => (
-                <MenuItem value={name} key={`eph_container_${name}`}>
-                  {name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </Box>
-        <Box
-          sx={theme => ({
-            paddingTop: theme.spacing(1),
-            flex: 1,
-            width: '100%',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column-reverse',
-          })}
-        >
-          <div
-            id="xterm-container"
-            ref={x => setTerminalContainerRef(x)}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column-reverse' }}
-          />
-        </Box>
-      </DialogContent>
+      {content}
     </Dialog>
   );
 }

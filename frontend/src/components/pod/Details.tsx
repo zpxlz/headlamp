@@ -1,48 +1,97 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Icon } from '@iconify/react';
+import Checkbox from '@mui/material/Checkbox';
 import FormControl from '@mui/material/FormControl';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import InputLabel from '@mui/material/InputLabel';
+import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import Switch from '@mui/material/Switch';
 import { styled } from '@mui/system';
+import { Terminal as XTerminal } from '@xterm/xterm';
 import _ from 'lodash';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
-import { Terminal as XTerminal } from 'xterm';
+import { useLocation, useParams } from 'react-router-dom';
+import { getDefaultContainer, resolveContainerName } from '../../helpers/podContainer';
 import { KubeContainerStatus } from '../../lib/k8s/cluster';
 import Pod from '../../lib/k8s/pod';
+import { localeDate } from '../../lib/util';
 import { DefaultHeaderAction } from '../../redux/actionButtonsSlice';
 import { EventStatus, HeadlampEventType, useEventCallback } from '../../redux/headlampEventSlice';
-import { ActionButton, LightTooltip, SectionBox, SimpleTable } from '../common';
+import { Activity } from '../activity/Activity';
+import ActionButton from '../common/ActionButton';
 import Link from '../common/Link';
 import { LogViewer, LogViewerProps } from '../common/LogViewer';
+import { NameValueTableRow } from '../common/NameValueTable';
 import {
   ConditionsSection,
   ContainersSection,
   DetailsGrid,
+  MetadataDictGrid,
   VolumeSection,
 } from '../common/Resource';
 import AuthVisible from '../common/Resource/AuthVisible';
+import {
+  ALL_SEVERITIES,
+  filterLogsBySeverity,
+  LogSeverity,
+} from '../common/Resource/logSeverityFilter';
+import SectionBox from '../common/SectionBox';
+import SimpleTable from '../common/SimpleTable';
 import Terminal from '../common/Terminal';
+import LightTooltip from '../common/Tooltip/TooltipLight';
+import { PodDiagnosticsSection } from '../diagnostics/Diagnostics';
+import { useLocalStorageState } from '../globalSearch/useLocalStorageState';
+import { colorizePrettifiedLog } from './jsonHandling';
 import { makePodStatusLabel } from './List';
+import { PodDebugAction } from './PodDebugAction';
+import PodResourceClaimsSection from './PodResourceClaimsSection';
 
 const PaddedFormControlLabel = styled(FormControlLabel)(({ theme }) => ({
   margin: 0,
   paddingTop: theme.spacing(2),
-  paddingRight: theme.spacing(2),
+  paddingRight: theme.spacing(1),
 }));
 
 interface PodLogViewerProps extends Omit<LogViewerProps, 'logs'> {
   item: Pod;
+  initialContainer?: string;
 }
 
-function PodLogViewer(props: PodLogViewerProps) {
-  const { item, onClose, open, ...other } = props;
-  const [container, setContainer] = React.useState(getDefaultContainer());
+export function PodLogViewer(props: PodLogViewerProps) {
+  const { item, onClose, open, initialContainer, ...other } = props;
+  const [container, setContainer] = React.useState(() =>
+    resolveContainerName(item, initialContainer)
+  );
   const [showPrevious, setShowPrevious] = React.useState<boolean>(false);
-  const [showTimestamps, setShowTimestamps] = React.useState<boolean>(true);
-  const [follow, setFollow] = React.useState<boolean>(true);
+  const [showTimestamps, setShowTimestamps] = useLocalStorageState<boolean>(
+    'headlamp.logs.showTimestamps',
+    true
+  );
+  const [follow, setFollow] = useLocalStorageState<boolean>('headlamp.logs.follow', true);
+  const [prettifyLogs, setPrettifyLogs] = useLocalStorageState<boolean>(
+    'headlamp.logs.prettifyLogs',
+    false
+  );
+  const [formatJsonValues, setFormatJsonValues] = React.useState<boolean>(false);
+  const [hasJsonLogs, setHasJsonLogs] = React.useState<boolean>(false);
   const [lines, setLines] = React.useState<number>(100);
   const [logs, setLogs] = React.useState<{ logs: string[]; lastLineShown: number }>({
     logs: [],
@@ -52,24 +101,72 @@ function PodLogViewer(props: PodLogViewerProps) {
   const [cancelLogsStream, setCancelLogsStream] = React.useState<(() => void) | null>(null);
   const xtermRef = React.useRef<XTerminal | null>(null);
   const { t } = useTranslation();
+  const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<LogSeverity[]>(
+    'headlamp.logs.severityFilter',
+    ALL_SEVERITIES
+  );
+  const selectedSeveritiesRef = React.useRef(selectedSeverities);
 
-  function getDefaultContainer() {
-    return item.spec.containers.length > 0 ? item.spec.containers[0].name : '';
-  }
+  React.useEffect(() => {
+    selectedSeveritiesRef.current = selectedSeverities;
+  }, [selectedSeverities]);
+
+  // Re-render xterm when selectedSeverities changes
+  React.useEffect(() => {
+    if (xtermRef.current && logs.logs.length > 0) {
+      xtermRef.current.clear();
+      const displayLogs = logs.logs.map(logEntry => {
+        if (prettifyLogs && hasJsonLogs) {
+          return colorizePrettifiedLog(logEntry);
+        }
+        return logEntry;
+      });
+      const filteredLogs = filterLogsBySeverity(displayLogs, selectedSeverities);
+      xtermRef.current.write(filteredLogs.join('').replaceAll('\n', '\r\n'));
+
+      // Update lastLineShown just in case, though it shouldn't be strictly necessary here
+      setLogs(current => ({ ...current, lastLineShown: current.logs.length - 1 }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSeverities]);
 
   const options = { leading: true, trailing: true, maxWait: 1000 };
-  function setLogsDebounced(logLines: string[]) {
+
+  function setLogsDebounced({
+    logs: logLines,
+    hasJsonLogs,
+  }: {
+    logs: string[];
+    hasJsonLogs: boolean;
+  }) {
+    setHasJsonLogs(hasJsonLogs);
+
     setLogs(current => {
       if (current.lastLineShown >= logLines.length) {
+        // Full re-render
+        const displayLogs = logLines.map(logEntry => {
+          if (prettifyLogs && hasJsonLogs) {
+            return colorizePrettifiedLog(logEntry);
+          }
+          return logEntry;
+        });
+        const filteredLogs = filterLogsBySeverity(displayLogs, selectedSeveritiesRef.current);
         xtermRef.current?.clear();
-        xtermRef.current?.write(logLines.join('').replaceAll('\n', '\r\n'));
+        xtermRef.current?.write(filteredLogs.join('').replaceAll('\n', '\r\n'));
       } else {
-        xtermRef.current?.write(
-          logLines
-            .slice(current.lastLineShown + 1)
-            .join('')
-            .replaceAll('\n', '\r\n')
-        );
+        // Incremental write: slice raw lines first, then format and filter
+        const newRawLines = logLines.slice(current.lastLineShown + 1);
+        const displayLogs = newRawLines.map(logEntry => {
+          if (prettifyLogs && hasJsonLogs) {
+            return colorizePrettifiedLog(logEntry);
+          }
+          return logEntry;
+        });
+        const filteredLogs = filterLogsBySeverity(displayLogs, selectedSeveritiesRef.current);
+
+        if (filteredLogs.length > 0) {
+          xtermRef.current?.write(filteredLogs.join('').replaceAll('\n', '\r\n'));
+        }
       }
 
       return {
@@ -77,6 +174,7 @@ function PodLogViewer(props: PodLogViewerProps) {
         lastLineShown: logLines.length - 1,
       };
     });
+
     // If we stopped following the logs and we have logs already,
     // then we don't need to fetch them again.
     if (!follow && logs.logs.length > 0) {
@@ -88,7 +186,15 @@ function PodLogViewer(props: PodLogViewerProps) {
       return;
     }
   }
+
   const debouncedSetState = _.debounce(setLogsDebounced, 500, options);
+  React.useEffect(() => {
+    const next = getDefaultContainer(item);
+    if (next && !container) {
+      setContainer(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.status]);
 
   React.useEffect(
     () => {
@@ -97,12 +203,15 @@ function PodLogViewer(props: PodLogViewerProps) {
       if (props.open) {
         xtermRef.current?.clear();
         setLogs({ logs: [], lastLineShown: -1 });
+        setHasJsonLogs(false);
 
         callback = item.getLogs(container, debouncedSetState, {
           tailLines: lines,
           showPrevious,
           showTimestamps,
           follow,
+          prettifyLogs,
+          formatJsonValues,
           /**
            * When the connection is lost, show the reconnect button.
            * This will stop the current log stream.
@@ -120,11 +229,12 @@ function PodLogViewer(props: PodLogViewerProps) {
       };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [container, lines, open, showPrevious, showTimestamps, follow]
+    [container, lines, open, showPrevious, showTimestamps, follow, prettifyLogs, formatJsonValues]
   );
 
   function handleContainerChange(event: any) {
     setContainer(event.target.value);
+    setHasJsonLogs(false);
   }
 
   function handleLinesChange(event: any) {
@@ -147,11 +257,19 @@ function PodLogViewer(props: PodLogViewerProps) {
   }
 
   function handleTimestampsChange() {
-    setShowTimestamps(timestamps => !timestamps);
+    setShowTimestamps(prev => !prev);
   }
 
   function handleFollowChange() {
     setFollow(follow => !follow);
+  }
+
+  function handlePrettifyChange() {
+    setPrettifyLogs(prettify => !prettify);
+  }
+
+  function handleFormatJsonValuesChange() {
+    setFormatJsonValues(format => !format);
   }
 
   /**
@@ -170,6 +288,8 @@ function PodLogViewer(props: PodLogViewerProps) {
       showPrevious,
       showTimestamps,
       follow,
+      prettifyLogs,
+      formatJsonValues,
       /**
        * When the connection is lost, show the reconnect button.
        * This will stop the current log stream.
@@ -254,7 +374,7 @@ function PodLogViewer(props: PodLogViewerProps) {
                 {i}
               </MenuItem>
             ))}
-            <MenuItem value={-1}>All</MenuItem>
+            <MenuItem value={-1}>{t('translation|All')}</MenuItem>
           </Select>
         </FormControl>,
         <LightTooltip
@@ -267,7 +387,7 @@ function PodLogViewer(props: PodLogViewerProps) {
           }
         >
           <PaddedFormControlLabel
-            label={t('translation|Show previous')}
+            label={t('translation|Previous')}
             disabled={!hasContainerRestarted()}
             control={
               <Switch
@@ -276,35 +396,105 @@ function PodLogViewer(props: PodLogViewerProps) {
                 name="checkPrevious"
                 color="primary"
                 size="small"
+                sx={{ transform: 'scale(0.8)' }}
               />
             }
           />
         </LightTooltip>,
-        <PaddedFormControlLabel
-          label={t('translation|Timestamps')}
-          control={
-            <Switch
-              checked={showTimestamps}
-              onChange={handleTimestampsChange}
-              name="checkTimestamps"
-              color="primary"
-              size="small"
+        <LightTooltip title={t('translation|Show timestamps in the logs.')}>
+          <PaddedFormControlLabel
+            label={t('translation|Timestamps')}
+            control={
+              <Switch
+                checked={showTimestamps}
+                onChange={handleTimestampsChange}
+                name="checkTimestamps"
+                color="primary"
+                size="small"
+                sx={{ transform: 'scale(0.8)' }}
+              />
+            }
+          />
+        </LightTooltip>,
+        <LightTooltip title={t('translation|Follow logs in real-time.')}>
+          <PaddedFormControlLabel
+            label={t('translation|Follow')}
+            control={
+              <Switch
+                checked={follow}
+                onChange={handleFollowChange}
+                name="follow"
+                color="primary"
+                size="small"
+                sx={{ transform: 'scale(0.8)' }}
+              />
+            }
+          />
+        </LightTooltip>,
+        <FormControl sx={{ minWidth: '9rem' }}>
+          <InputLabel shrink id="severity-filter-label">
+            {t('translation|Severity')}
+          </InputLabel>
+          <Select
+            labelId="severity-filter-label"
+            id="severity-filter"
+            multiple
+            value={selectedSeverities}
+            onChange={event => {
+              const value = event.target.value as LogSeverity[];
+              if (value.length > 0) {
+                setSelectedSeverities(() => value);
+              }
+            }}
+            renderValue={selected =>
+              selected.length === ALL_SEVERITIES.length
+                ? t('translation|All')
+                : (selected as LogSeverity[]).map(s => s.toUpperCase()).join(', ')
+            }
+          >
+            {ALL_SEVERITIES.map(severity => (
+              <MenuItem key={severity} value={severity}>
+                <Checkbox checked={selectedSeverities.includes(severity)} size="small" />
+                <ListItemText primary={severity.toUpperCase()} />
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>,
+        hasJsonLogs && (
+          <PaddedFormControlLabel
+            label={t('translation|Prettify')}
+            control={
+              <Switch
+                checked={prettifyLogs}
+                onChange={handlePrettifyChange}
+                name="prettifyLogs"
+                color="primary"
+                size="small"
+                sx={{ transform: 'scale(0.8)' }}
+              />
+            }
+          />
+        ),
+        hasJsonLogs && (
+          <LightTooltip
+            title={t('translation|Show JSON values in plain text by removing escape characters.')}
+          >
+            <PaddedFormControlLabel
+              label={t('translation|Format')}
+              control={
+                <Switch
+                  checked={formatJsonValues}
+                  onChange={handleFormatJsonValuesChange}
+                  name="formatJsonValues"
+                  color="primary"
+                  size="small"
+                  sx={{ transform: 'scale(0.8)' }}
+                />
+              }
             />
-          }
-        />,
-        <PaddedFormControlLabel
-          label={t('translation|Follow')}
-          control={
-            <Switch
-              checked={follow}
-              onChange={handleFollowChange}
-              name="follow"
-              color="primary"
-              size="small"
-            />
-          }
-        />,
-      ]}
+          </LightTooltip>
+        ),
+      ].filter(Boolean)}
       {...other}
     />
   );
@@ -316,10 +506,10 @@ export interface VolumeDetailsProps {
 
 export function VolumeDetails(props: VolumeDetailsProps) {
   const { volumes } = props;
+  const { t } = useTranslation();
   if (!volumes) {
     return null;
   }
-  const { t } = useTranslation();
   return (
     <SectionBox title={t('translation|Volumes')}>
       <SimpleTable
@@ -379,23 +569,286 @@ function TolerationsSection(props: { tolerations: any[] }) {
 
 export interface PodDetailsProps {
   showLogsDefault?: boolean;
+  name?: string;
+  namespace?: string;
+  cluster?: string;
 }
 
 export default function PodDetails(props: PodDetailsProps) {
-  const { showLogsDefault } = props;
-  const { namespace, name } = useParams<{ namespace: string; name: string }>();
-  const [showLogs, setShowLogs] = React.useState(!!showLogsDefault);
-  const [showTerminal, setShowTerminal] = React.useState(false);
+  const params = useParams<{ namespace: string; name: string }>();
+  const { name = params.name, namespace = params.namespace, cluster } = props;
   const { t } = useTranslation('glossary');
-  const [isAttached, setIsAttached] = React.useState(false);
   const dispatchHeadlampEvent = useEventCallback();
+
+  const lastAutoLaunchedPodLogs = React.useRef<string | null>(null);
+  const lastAutoLaunchedPodExec = React.useRef<string | null>(null);
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const autoLaunchView = queryParams.get('view');
+  const autoLaunchContainer = queryParams.get('container') ?? undefined;
+  const [podItem, setPodItem] = React.useState<Pod | null>(null);
+
+  const launchLogs = React.useCallback(
+    (item: Pod, container?: string) => {
+      Activity.launch({
+        id: 'logs-' + item.metadata.uid,
+        title: t('Logs: {{ itemName }}', { itemName: item.metadata.name }),
+        cluster: item.cluster,
+        icon: <Icon icon="mdi:file-document-box-outline" width="100%" height="100%" />,
+        location: 'full',
+        content: (
+          <PodLogViewer
+            noDialog
+            open
+            item={item}
+            onClose={() => {}}
+            initialContainer={container ?? autoLaunchContainer}
+          />
+        ),
+      });
+      dispatchHeadlampEvent({
+        type: HeadlampEventType.LOGS,
+        data: {
+          status: EventStatus.OPENED,
+        },
+      });
+    },
+    [t, dispatchHeadlampEvent, autoLaunchContainer]
+  );
+
+  const launchTerminal = React.useCallback(
+    (item: Pod) => {
+      const activityId = 'terminal-' + item.metadata.uid;
+      Activity.launch({
+        id: activityId,
+        title: item.metadata.name,
+        cluster: item.cluster,
+        icon: <Icon icon="mdi:console" width="100%" height="100%" />,
+        location: 'full',
+        content: (
+          <Terminal
+            noDialog
+            open
+            item={item}
+            onClose={() => Activity.close(activityId)}
+            isAttach={false}
+            initialContainer={autoLaunchContainer}
+          />
+        ),
+      });
+      dispatchHeadlampEvent({
+        type: HeadlampEventType.TERMINAL,
+        data: {
+          resource: item,
+          status: EventStatus.OPENED,
+        },
+      });
+    },
+    [dispatchHeadlampEvent, autoLaunchContainer]
+  );
+
+  React.useEffect(() => {
+    if (autoLaunchView !== 'logs') {
+      lastAutoLaunchedPodLogs.current = null;
+      return;
+    }
+
+    if (
+      podItem &&
+      autoLaunchView === 'logs' &&
+      lastAutoLaunchedPodLogs.current !== `${podItem.metadata.uid}:${autoLaunchContainer ?? ''}`
+    ) {
+      lastAutoLaunchedPodLogs.current = `${podItem.metadata.uid}:${autoLaunchContainer ?? ''}`;
+      launchLogs(podItem);
+    }
+  }, [podItem, launchLogs, autoLaunchView, autoLaunchContainer]);
+
+  React.useEffect(() => {
+    if (autoLaunchView !== 'exec') {
+      lastAutoLaunchedPodExec.current = null;
+      return;
+    }
+
+    if (
+      podItem &&
+      autoLaunchView === 'exec' &&
+      lastAutoLaunchedPodExec.current !== `${podItem.metadata.uid}:${autoLaunchContainer ?? ''}`
+    ) {
+      lastAutoLaunchedPodExec.current = `${podItem.metadata.uid}:${autoLaunchContainer ?? ''}`;
+      launchTerminal(podItem);
+    }
+  }, [podItem, launchTerminal, autoLaunchView, autoLaunchContainer]);
+
+  function prepareExtraInfo(item: Pod | null) {
+    let extraInfo: (NameValueTableRow & { hideLabel?: boolean })[] = [];
+    if (item) {
+      extraInfo = [
+        {
+          name: t('State'),
+          value: makePodStatusLabel(item, false, t),
+        },
+        {
+          name: t('Node'),
+          value: item.spec.nodeName ? (
+            <Link
+              routeName="node"
+              params={{ name: item.spec.nodeName }}
+              activeCluster={item.cluster}
+            >
+              {item.spec.nodeName}
+            </Link>
+          ) : (
+            ''
+          ),
+        },
+        {
+          name: t('Service Account'),
+          value:
+            !!item.spec.serviceAccountName || !!item.spec.serviceAccount ? (
+              <Link
+                routeName="serviceAccount"
+                params={{
+                  namespace: item.metadata.namespace,
+                  name: item.spec.serviceAccountName || item.spec.serviceAccount,
+                }}
+                activeCluster={item.cluster}
+              >
+                {item.spec.serviceAccountName || item.spec.serviceAccount}
+              </Link>
+            ) : (
+              ''
+            ),
+        },
+        // Show Host IP only if Host IPs doesn't exist or is empty
+        ...(item.status.hostIPs && item.status.hostIPs.length > 0
+          ? []
+          : [
+              {
+                name: t('Host IP'),
+                value: item.status.hostIP ?? '',
+              },
+            ]),
+        // Always include Host IPs, but hide if empty
+        {
+          name: t('Host IPs'),
+          value: item.status.hostIPs
+            ? item.status.hostIPs.map((ipObj: { ip: string }) => ipObj.ip).join(', ')
+            : '',
+          hideLabel: !item.status.hostIPs || item.status.hostIPs.length === 0,
+        },
+        // Show Pod IP only if Pod IPs doesn't exist or is empty
+        ...(item.status.podIPs && item.status.podIPs.length > 0
+          ? []
+          : [
+              {
+                name: t('Pod IP'),
+                value: item.status.podIP ?? '',
+              },
+            ]),
+        // Always include Pod IPs, but hide if empty
+        {
+          name: t('Pod IPs'),
+          value: item.status.podIPs
+            ? item.status.podIPs.map((ipObj: { ip: string }) => ipObj.ip).join(', ')
+            : '',
+          hideLabel: !item.status.podIPs || item.status.podIPs.length === 0,
+        },
+        {
+          name: t('QoS Class'),
+          value: item.status.qosClass,
+        },
+        {
+          name: t('Priority'),
+          value: item.spec.priority,
+        },
+        {
+          name: t('Priority Class'),
+          value: item.spec.priorityClassName ? (
+            <Link
+              routeName="priorityClass"
+              params={{ name: item.spec.priorityClassName }}
+              activeCluster={item.cluster}
+            >
+              {item.spec.priorityClassName}
+            </Link>
+          ) : (
+            ''
+          ),
+          hide: !item.spec.priorityClassName,
+        },
+        {
+          name: t('Pod Group'),
+          value: item.spec.schedulingGroup?.podGroupName ? (
+            <Link
+              routeName="PodGroup"
+              params={{
+                namespace: item.metadata.namespace,
+                name: item.spec.schedulingGroup.podGroupName,
+              }}
+              activeCluster={item.cluster}
+            >
+              {item.spec.schedulingGroup.podGroupName}
+            </Link>
+          ) : (
+            ''
+          ),
+          hide: !item.spec.schedulingGroup?.podGroupName,
+        },
+        {
+          name: t('Runtime Class'),
+          value: item.spec.runtimeClassName,
+          hide: !item.spec.runtimeClassName,
+        },
+        {
+          name: t('Nominated Node'),
+          value: item.status.nominatedNodeName,
+          hide: !item.status.nominatedNodeName,
+        },
+        {
+          name: t('Start Time'),
+          value: item.status.startTime ? localeDate(item.status.startTime) : '',
+          hide: !item.status.startTime,
+        },
+        {
+          name: t('Termination Grace Period'),
+          value:
+            item.spec.terminationGracePeriodSeconds !== undefined
+              ? t('translation|{{ seconds }}s', {
+                  seconds: item.spec.terminationGracePeriodSeconds,
+                })
+              : '',
+          hide: item.spec.terminationGracePeriodSeconds === undefined,
+        },
+        {
+          name: t('translation|Reason'),
+          value: item.status.reason,
+          hide: !item.status.reason,
+        },
+        {
+          name: t('translation|Message'),
+          value: item.status.message,
+          hide: !item.status.message,
+        },
+        {
+          name: t('Node Selectors'),
+          value: <MetadataDictGrid dict={item.spec.nodeSelector ?? {}} />,
+          hide: _.isEmpty(item.spec.nodeSelector),
+        },
+      ];
+    }
+    return extraInfo;
+  }
 
   return (
     <DetailsGrid
       resourceType={Pod}
       name={name}
       namespace={namespace}
+      cluster={cluster}
       withEvents
+      onResourceUpdate={item => {
+        setPodItem(item);
+      }}
       actions={item =>
         item && [
           {
@@ -404,17 +857,8 @@ export default function PodDetails(props: PodDetailsProps) {
               <AuthVisible item={item} authVerb="get" subresource="log">
                 <ActionButton
                   description={t('Show Logs')}
-                  aria-label={t('logs')}
                   icon="mdi:file-document-box-outline"
-                  onClick={() => {
-                    setShowLogs(true);
-                    dispatchHeadlampEvent({
-                      type: HeadlampEventType.LOGS,
-                      data: {
-                        status: EventStatus.OPENED,
-                      },
-                    });
-                  }}
+                  onClick={() => launchLogs(item)}
                 />
               </AuthVisible>
             ),
@@ -422,24 +866,18 @@ export default function PodDetails(props: PodDetailsProps) {
           {
             id: DefaultHeaderAction.POD_TERMINAL,
             action: (
-              <AuthVisible item={item} authVerb="get" subresource="exec">
+              <AuthVisible item={item} authVerb="create" subresource="exec">
                 <ActionButton
                   description={t('Terminal / Exec')}
-                  aria-label={t('terminal')}
                   icon="mdi:console"
-                  onClick={() => {
-                    setShowTerminal(true);
-                    dispatchHeadlampEvent({
-                      type: HeadlampEventType.TERMINAL,
-                      data: {
-                        resource: item,
-                        status: EventStatus.CLOSED,
-                      },
-                    });
-                  }}
+                  onClick={() => launchTerminal(item)}
                 />
               </AuthVisible>
             ),
+          },
+          {
+            id: DefaultHeaderAction.POD_DEBUG,
+            action: <PodDebugAction item={item} />,
           },
           {
             id: DefaultHeaderAction.POD_ATTACH,
@@ -447,16 +885,22 @@ export default function PodDetails(props: PodDetailsProps) {
               <AuthVisible item={item} authVerb="get" subresource="attach">
                 <ActionButton
                   description={t('Attach')}
-                  aria-label={t('attach')}
                   icon="mdi:connection"
                   onClick={() => {
-                    setIsAttached(true);
                     dispatchHeadlampEvent({
                       type: HeadlampEventType.POD_ATTACH,
                       data: {
                         resource: item,
                         status: EventStatus.OPENED,
                       },
+                    });
+                    Activity.launch({
+                      id: 'attach-' + item.metadata.uid,
+                      title: item.metadata.name,
+                      cluster: item.cluster,
+                      icon: <Icon icon="mdi:console" width="100%" height="100%" />,
+                      location: 'full',
+                      content: <Terminal noDialog open item={item} onClose={() => {}} isAttach />,
                     });
                   }}
                 />
@@ -465,59 +909,19 @@ export default function PodDetails(props: PodDetailsProps) {
           },
         ]
       }
-      extraInfo={item =>
+      extraInfo={item => prepareExtraInfo(item)}
+      extraSections={(item, context) =>
         item && [
           {
-            name: t('State'),
-            value: makePodStatusLabel(item),
-          },
-          {
-            name: t('Node'),
-            value: item.spec.nodeName ? (
-              <Link routeName="node" params={{ name: item.spec.nodeName }}>
-                {item.spec.nodeName}
-              </Link>
-            ) : (
-              ''
+            id: 'headlamp.pod-diagnostics',
+            section: (
+              <PodDiagnosticsSection
+                pod={item}
+                events={context.events}
+                onViewLogs={container => launchLogs(item, container)}
+              />
             ),
           },
-          {
-            name: t('Service Account'),
-            value:
-              !!item.spec.serviceAccountName || !!item.spec.serviceAccount ? (
-                <Link
-                  routeName="serviceAccount"
-                  params={{
-                    namespace: item.metadata.namespace,
-                    name: item.spec.serviceAccountName || item.spec.serviceAccount,
-                  }}
-                >
-                  {item.spec.serviceAccountName || item.spec.serviceAccount}
-                </Link>
-              ) : (
-                ''
-              ),
-          },
-          {
-            name: t('Host IP'),
-            value: item.status.hostIP,
-          },
-          {
-            name: t('Pod IP'),
-            value: item.status.podIP,
-          },
-          {
-            name: t('QoS Class'),
-            value: item.status.qosClass,
-          },
-          {
-            name: t('Priority'),
-            value: item.spec.priority,
-          },
-        ]
-      }
-      extraSections={item =>
-        item && [
           {
             id: 'headlamp.pod-tolerations',
             section: <TolerationsSection tolerations={item?.spec?.tolerations || []} />,
@@ -528,53 +932,19 @@ export default function PodDetails(props: PodDetailsProps) {
           },
           {
             id: 'headlamp.pod-containers',
-            section: <ContainersSection resource={item?.jsonData} />,
+            section: <ContainersSection resource={item} />,
           },
+          ...(item.resourceClaims.length > 0
+            ? [
+                {
+                  id: 'headlamp.pod-resource-claims',
+                  section: <PodResourceClaimsSection pod={item} />,
+                },
+              ]
+            : []),
           {
             id: 'headlamp.pod-volumes',
             section: <VolumeSection resource={item?.jsonData} />,
-          },
-          {
-            id: 'headlamp.pod-logs',
-            section: (
-              <PodLogViewer
-                key="logs"
-                open={showLogs}
-                item={item}
-                onClose={() => {
-                  dispatchHeadlampEvent({
-                    type: HeadlampEventType.LOGS,
-                    data: {
-                      resource: item,
-                      status: EventStatus.CLOSED,
-                    },
-                  });
-                  setShowLogs(false);
-                }}
-              />
-            ),
-          },
-          {
-            id: 'headlamp.pod-terminal',
-            section: (
-              <Terminal
-                key="terminal"
-                open={showTerminal || isAttached}
-                item={item}
-                onClose={() => {
-                  setShowTerminal(false);
-                  dispatchHeadlampEvent({
-                    type: HeadlampEventType.TERMINAL,
-                    data: {
-                      resource: item,
-                      status: EventStatus.CLOSED,
-                    },
-                  });
-                  setIsAttached(false);
-                }}
-                isAttach={isAttached}
-              />
-            ),
           },
         ]
       }

@@ -1,17 +1,135 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import i18next from 'i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import { initReactI18next } from 'react-i18next';
-import sharedConfig from './i18nextSharedConfig';
+import sharedConfig from './i18nextSharedConfig.mjs';
 
 const en = {}; // To keep TS happy.
 
-export const supportedLanguages: { [langCode: string]: string } = {
-  en: 'English',
-  es: 'Español',
-  fr: 'Français',
-  pt: 'Português',
-  de: 'Deutsch',
+export const supportedLanguages: {
+  [langCode: string]: {
+    label: string;
+    dir: 'ltr' | 'rtl';
+  };
+} = {
+  en: {
+    label: 'English',
+    dir: 'ltr',
+  },
+  es: {
+    label: 'Español',
+    dir: 'ltr',
+  },
+  fr: {
+    label: 'Français',
+    dir: 'ltr',
+  },
+  ru: {
+    label: 'Русский',
+    dir: 'ltr',
+  },
+  'pt-PT': {
+    label: 'Português (Portugal)',
+    dir: 'ltr',
+  },
+  'pt-BR': {
+    label: 'Português (Brasil)',
+    dir: 'ltr',
+  },
+  de: {
+    label: 'Deutsch',
+    dir: 'ltr',
+  },
+  it: {
+    label: 'Italiano',
+    dir: 'ltr',
+  },
+  'zh-TW': {
+    label: '繁體中文',
+    dir: 'ltr',
+  },
+  zh: {
+    label: '简体中文',
+    dir: 'ltr',
+  },
+  ko: {
+    label: '한국어',
+    dir: 'ltr',
+  },
+  ja: {
+    label: '日本語',
+    dir: 'ltr',
+  },
+  hi: {
+    label: 'हिन्दी',
+    dir: 'ltr',
+  },
+  bn: {
+    label: 'বাংলা',
+    dir: 'ltr',
+  },
+  ta: {
+    label: 'தமிழ்',
+    dir: 'ltr',
+  },
+  ar: {
+    label: 'العربية',
+    dir: 'rtl',
+  },
+  ur: {
+    label: 'اردو',
+    dir: 'rtl',
+  },
+  he: {
+    label: 'עברית',
+    dir: 'rtl',
+  },
+  cs: {
+    label: 'Čeština',
+    dir: 'ltr',
+  },
+  hu: {
+    label: 'Magyar',
+    dir: 'ltr',
+  },
+  id: {
+    label: 'Bahasa Indonesia',
+    dir: 'ltr',
+  },
+  nl: {
+    label: 'Nederlands',
+    dir: 'ltr',
+  },
+  pl: {
+    label: 'Polski',
+    dir: 'ltr',
+  },
+  sv: {
+    label: 'Svenska',
+    dir: 'ltr',
+  },
+  tr: {
+    label: 'Türkçe',
+    dir: 'ltr',
+  },
 };
+
+export const isRTL = (lang: string) => supportedLanguages[lang]?.dir === 'rtl';
 
 i18next
   // detect user language https://github.com/i18next/i18next-browser-languageDetector
@@ -27,9 +145,9 @@ i18next
       namespace: Namespace,
       callback: (errorValue: unknown, translations: null | (typeof en)[Namespace]) => void
     ) {
-      import(`./locales/${language}/${namespace}.json`)
+      import(`./locales/${language.toLowerCase()}/${namespace}.json?import=default`)
         .then(resources => {
-          callback(null, resources);
+          callback(null, resources.default);
         })
         .catch(error => {
           callback(error, null);
@@ -38,10 +156,11 @@ i18next
   })
   // i18next options: https://www.i18next.com/overview/configuration-options
   .init({
-    debug: process.env.NODE_ENV === 'development',
-    ns: ['translation', 'glossary'],
-    defaultNS: 'translation',
-    fallbackLng: 'en',
+    debug: import.meta.env.DEV && !import.meta.env.UNDER_TEST,
+    ns: sharedConfig.namespaces,
+    defaultNS: sharedConfig.defaultNamespace,
+    // Keeps the previously stored region-less "pt" preference on Portuguese.
+    fallbackLng: { pt: ['pt-PT', 'en'], default: ['en'] },
     contextSeparator: sharedConfig.contextSeparator,
     supportedLngs: Object.keys(supportedLanguages),
     // nonExplicitSupportedLngs: true,

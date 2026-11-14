@@ -1,8 +1,24 @@
-import { Meta, Story } from '@storybook/react';
-import StorageClass, { KubeStorageClass } from '../../lib/k8s/storageClass';
-import { TestContext } from '../../test';
-import Details from './ClaimDetails';
-import { BASE_SC } from './storyHelper';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
+import Details from './ClassDetails';
+import { BASE_SC_EXPLICIT_EXPANDABLE } from './storyHelper';
 
 export default {
   title: 'StorageClass/DetailsView',
@@ -11,7 +27,7 @@ export default {
   decorators: [
     Story => {
       return (
-        <TestContext>
+        <TestContext routerMap={{ name: 'storage-class-expandable' }}>
           <Story />
         </TestContext>
       );
@@ -19,19 +35,20 @@ export default {
   ],
 } as Meta;
 
-interface MockerStory {
-  json?: KubeStorageClass;
-}
-
-const Template: Story = (args: MockerStory) => {
-  const { json } = args;
-  if (!!json) {
-    StorageClass.useGet = () => [new StorageClass(json), null, () => {}, () => {}] as any;
-  }
+const Template: StoryFn = () => {
   return <Details />;
 };
 
 export const Base = Template.bind({});
-Base.args = {
-  json: BASE_SC,
+Base.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(`${API_BASE}/apis/storage.k8s.io/v1/storageclasses/storage-class-expandable`, () =>
+          HttpResponse.json(BASE_SC_EXPLICIT_EXPANDABLE)
+        ),
+        http.get(`${API_BASE}/apis/storage.k8s.io/v1/storageclasses`, () => HttpResponse.error()),
+      ],
+    },
+  },
 };

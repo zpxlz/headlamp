@@ -1,6 +1,23 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { useTranslation } from 'react-i18next';
 import Service from '../../lib/k8s/service';
 import LabelListItem from '../common/LabelListItem';
+import { MetadataDictGrid } from '../common/Resource';
 import ResourceListView from '../common/Resource/ResourceListView';
 
 export default function ServiceList() {
@@ -13,36 +30,45 @@ export default function ServiceList() {
       columns={[
         'name',
         'namespace',
+        'cluster',
         {
           id: 'type',
           label: t('translation|Type'),
-          getter: service => service.spec.type,
-          sort: true,
+          gridTemplate: 'min-content',
+          filterVariant: 'multi-select',
+          getValue: service => service.spec.type,
         },
         {
           id: 'clusterIP',
           label: t('Cluster IP'),
-          getter: service => service.spec.clusterIP,
-          sort: true,
+          gridTemplate: 'min-content',
+          getValue: service => service.spec.clusterIP,
+          copyable: true,
         },
         {
           id: 'externalIP',
           label: t('External IP'),
-          getter: service => service.getExternalAddresses(),
-          sort: true,
+          gridTemplate: 'min-content',
+          getValue: service => service.getExternalAddresses() || '',
+          render: service => service.getExternalAddresses() || '-',
+          copyable: true,
         },
         {
           id: 'ports',
           label: t('Ports'),
-          getter: service => <LabelListItem labels={service.getPorts()} />,
-          sort: true,
+          gridTemplate: 'auto',
+          getValue: service => service.getFormattedPorts()?.join(', '),
+          render: service => <LabelListItem labels={service.getFormattedPorts() ?? []} />,
         },
         {
           id: 'selector',
           label: t('Selector'),
-          getter: service => <LabelListItem labels={service.getSelector()} />,
-          sort: true,
+          gridTemplate: 'auto',
+          getValue: service => service.getSelector().join(', '),
+          render: service =>
+            service.spec.selector ? <MetadataDictGrid dict={service.spec.selector} /> : null,
         },
+        'labels',
         'age',
       ]}
     />

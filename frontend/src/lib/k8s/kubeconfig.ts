@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * KubeconfigObject is the object that is stored in indexDB as string format.
  * It is a JSON encoded version of the kubeconfig file.
@@ -38,7 +54,7 @@ export interface KubeconfigObject {
      * @see {@link https://kubernetes.io/docs/reference/config-api/kubeconfig.v1/#Cluster | more info}
      */
     cluster: {
-      /** Server is the address of the kubernetes cluster (https://hostname:port). */
+      /** Server is the address of the kubernetes cluster (`https://hostname:port`). */
       server: string;
       /** TLSServerName is used to check server certificate. If TLSServerName is empty, the hostname used to contact the server is used. */
       tlsServerName?: string;
@@ -138,12 +154,19 @@ export interface KubeconfigObject {
       user: string;
       /** namespace is the default namespace. */
       namespace?: string;
+      /**  this is needed for attaching clusterID to the cluster for accurate cluster actions */
+      clusterID?: string;
+      /** Source for kubeconfig */
+      source?: string;
       /** Extensions holds additional information. This is useful for extenders so that reads and writes don't clobber unknown fields on the Context object. */
       extensions?: Array<{
         /** name is the nickname of the extension. */
         name: string;
         /** Extension holds the extension information */
-        extension: {};
+        extension: {
+          /** customName is the custom name for the cluster. */
+          customName?: string;
+        };
       }>;
     };
   }>;

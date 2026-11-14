@@ -1,16 +1,38 @@
-import { FormControlLabel, Switch } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import FormControlLabel from '@mui/material/FormControlLabel';
 import Grid from '@mui/material/Grid';
+import { Theme } from '@mui/material/styles';
+import Switch from '@mui/material/Switch';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { useDispatch } from 'react-redux';
 import { useLocation } from 'react-router';
-import Event, { KubeEvent } from '../../lib/k8s/event';
+import Event from '../../lib/k8s/event';
 import Node from '../../lib/k8s/node';
 import Pod from '../../lib/k8s/pod';
 import { useFilterFunc } from '../../lib/util';
-import { setSearchFilter } from '../../redux/filterSlice';
-import { DateLabel, Link, PageGrid, StatusLabel } from '../common';
-import Empty from '../common/EmptyContent';
+import { useNamespaces } from '../../redux/filterSlice';
+import { useTypedSelector } from '../../redux/hooks';
+import { OverviewChart } from '../../redux/overviewChartsSlice';
+import EventsLifetimeInfo from '../common/EventsLifetimeInfo';
+import { DateLabel } from '../common/Label';
+import { StatusLabel } from '../common/Label';
+import Link from '../common/Link';
+import { PageGrid } from '../common/Resource';
 import ResourceListView from '../common/Resource/ResourceListView';
 import { SectionBox } from '../common/SectionBox';
 import ShowHideLabel from '../common/ShowHideLabel';
@@ -21,37 +43,75 @@ import {
   NodesStatusCircleChart,
   PodsStatusCircleChart,
 } from './Charts';
+import { ClusterGroupErrorMessage } from './ClusterGroupErrorMessage';
+
+const OVERVIEW_REFETCH_INTERVAL_MS = 60_000;
 
 export default function Overview() {
   const { t } = useTranslation(['translation']);
-
-  const [pods] = Pod.useList();
-  const [nodes] = Node.useList();
-
+  // The overview only needs periodic snapshots for aggregate charts. Avoid long-lived
+  // watches here because large clusters can stream enough events to exhaust the tab.
+  const podsQuery = Pod.useList({ refetchInterval: OVERVIEW_REFETCH_INTERVAL_MS });
+  const [pods] = podsQuery;
+  const [nodes] = Node.useList({ refetchInterval: OVERVIEW_REFETCH_INTERVAL_MS });
   const [nodeMetrics, metricsError] = Node.useMetrics();
+  const chartProcessors = useTypedSelector(state => state.overviewCharts.processors);
 
-  const noMetrics = metricsError?.status === 404;
   const noPermissions = metricsError?.status === 403;
+  const noMetrics = metricsError !== null && !noPermissions;
+
+  // Process the default charts through any registered processors
+  const defaultCharts: OverviewChart[] = [
+    {
+      id: 'cpu',
+      component: () => (
+        <CpuCircularChart
+          items={nodes}
+          itemsMetrics={nodeMetrics}
+          noMetrics={noMetrics}
+          metricsError={metricsError}
+        />
+      ),
+    },
+    {
+      id: 'memory',
+      component: () => (
+        <MemoryCircularChart
+          items={nodes}
+          itemsMetrics={nodeMetrics}
+          noMetrics={noMetrics}
+          metricsError={metricsError}
+        />
+      ),
+    },
+    {
+      id: 'pods',
+      component: () => <PodsStatusCircleChart items={pods} />,
+    },
+    {
+      id: 'nodes',
+      component: () => (
+        <NodesStatusCircleChart items={nodes} pods={pods} podsLoaded={podsQuery.isSuccess} />
+      ),
+    },
+  ];
+  const charts = chartProcessors.reduce(
+    (currentCharts, p) => p.processor(currentCharts),
+    defaultCharts
+  );
 
   return (
     <PageGrid>
       <SectionBox title={t('translation|Overview')} py={2} mt={[4, 0, 0]}>
         {noPermissions ? (
-          <Empty color="error">{t('translation|No permissions to list pods.')}</Empty>
+          <ClusterGroupErrorMessage errors={[metricsError]} />
         ) : (
           <Grid container justifyContent="flex-start" alignItems="stretch" spacing={4}>
-            <Grid item xs sx={{ maxWidth: '300px' }}>
-              <CpuCircularChart items={nodes} itemsMetrics={nodeMetrics} noMetrics={noMetrics} />
-            </Grid>
-            <Grid item xs sx={{ maxWidth: '300px' }}>
-              <MemoryCircularChart items={nodes} itemsMetrics={nodeMetrics} noMetrics={noMetrics} />
-            </Grid>
-            <Grid item xs sx={{ maxWidth: '300px' }}>
-              <PodsStatusCircleChart items={pods} />
-            </Grid>
-            <Grid item xs sx={{ maxWidth: '300px' }}>
-              <NodesStatusCircleChart items={nodes} />
-            </Grid>
+            {charts.map(chart => (
+              <Grid key={chart.id} item xs sx={{ maxWidth: '300px' }}>
+                <chart.component />
+              </Grid>
+            ))}
           </Grid>
         )}
       </SectionBox>
@@ -67,8 +127,7 @@ function EventsSection() {
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
   const eventsFilter = queryParams.get('eventsFilter');
-  const dispatch = useDispatch();
-  const filterFunc = useFilterFunc(['.jsonData.involvedObject.kind']);
+  const filterFunc = useFilterFunc<Event>(['.jsonData.involvedObject.kind']);
   const [isWarningEventSwitchChecked, setIsWarningEventSwitchChecked] = React.useState(
     Boolean(
       JSON.parse(
@@ -77,29 +136,29 @@ function EventsSection() {
       )
     )
   );
-  const [events, eventsError] = Event.useList({ limit: Event.maxLimit });
+  const namespace = useNamespaces();
+  const { items: events, errors: eventsErrors } = Event.useList({
+    limit: Event.maxLimit,
+    namespace,
+    refetchInterval: OVERVIEW_REFETCH_INTERVAL_MS,
+  });
 
-  const warningActionFilterFunc = (event: KubeEvent) => {
-    if (!filterFunc(event)) {
-      return false;
-    }
+  const warningActionFilterFunc = React.useCallback(
+    (event: Event, search?: string) => {
+      if (!filterFunc(event, search)) {
+        return false;
+      }
 
-    if (isWarningEventSwitchChecked) {
-      return event.jsonData.type === 'Warning';
-    }
+      if (isWarningEventSwitchChecked) {
+        return event.jsonData.type === 'Warning';
+      }
 
-    // Return true because if we reach this point, it means we're only filtering by
-    // the default filterFunc (and its result was 'true').
-    return true;
-  };
-
-  React.useEffect(() => {
-    if (!eventsFilter) {
-      return;
-    }
-    // we want to consider search by id
-    dispatch(setSearchFilter(eventsFilter));
-  }, [eventsFilter]);
+      // Return true because if we reach this point, it means we're only filtering by
+      // the default filterFunc (and its result was 'true').
+      return true;
+    },
+    [filterFunc, isWarningEventSwitchChecked]
+  );
 
   const numWarnings = React.useMemo(
     () => events?.filter(e => e.type === 'Warning').length ?? '?',
@@ -110,9 +169,8 @@ function EventsSection() {
     return (
       <StatusLabel
         status={event.type === 'Normal' ? '' : 'warning'}
-        sx={theme => ({
+        sx={(theme: Theme) => ({
           [theme.breakpoints.up('md')]: {
-            minWidth: '180px',
             display: 'unset',
           },
         })}
@@ -135,7 +193,9 @@ function EventsSection() {
     <ResourceListView
       title={t('glossary|Events')}
       headerProps={{
+        noNamespaceFilter: false,
         titleSideActions: [
+          <EventsLifetimeInfo key="event-lifetime-info" />,
           <FormControlLabel
             checked={isWarningEventSwitchChecked}
             label={t('Only warnings ({{ numWarnings }})', { numWarnings })}
@@ -144,59 +204,77 @@ function EventsSection() {
               localStorage.setItem(EVENT_WARNING_SWITCH_FILTER_STORAGE_KEY, checked.toString());
               setIsWarningEventSwitchChecked(checked);
             }}
+            key="warning-toggle"
           />,
         ],
       }}
+      defaultGlobalFilter={eventsFilter ?? undefined}
       data={events}
-      errorMessage={Event.getErrorMessage(eventsError)}
+      errors={eventsErrors}
       columns={[
         {
+          id: 'type',
           label: t('Type'),
-          getter: event => event.involvedObject.kind,
-          sort: true,
+          gridTemplate: 'min-content',
+          filterVariant: 'multi-select',
+          getValue: event => event.involvedObject.kind,
         },
         {
+          id: 'name',
           label: t('Name'),
-          getter: event => makeObjectLink(event),
-          cellProps: {
-            scope: 'row',
-            component: 'th',
-          },
-          gridTemplate: 1.5,
-          sort: true,
+          getValue: event => event.involvedObjectInstance?.getName() ?? event.involvedObject.name,
+          render: event => makeObjectLink(event),
+          gridTemplate: 'auto',
         },
         'namespace',
+        'cluster',
         {
+          id: 'node',
+          label: t('glossary|Node'),
+          gridTemplate: 'min-content',
+          filterVariant: 'multi-select',
+          getValue: event => event.source?.host ?? '',
+        },
+        {
+          id: 'reason',
           label: t('Reason'),
-          getter: event => (
+          gridTemplate: 'min-content',
+          filterVariant: 'multi-select',
+          getValue: event => event.reason,
+          render: event => (
             <LightTooltip title={event.reason} interactive>
               {makeStatusLabel(event)}
             </LightTooltip>
           ),
-          sort: (e1: Event, e2: Event) => e1.reason.localeCompare(e2.reason),
         },
         {
+          id: 'message',
           label: t('Message'),
-          getter: event => (
+          getValue: event => event.message ?? '',
+          render: event => (
             <ShowHideLabel labelId={event.metadata?.uid || ''}>{event.message || ''}</ShowHideLabel>
           ),
-          sort: true,
-          gridTemplate: 1.5,
+          gridTemplate: 'auto',
         },
         {
+          id: 'count',
+          label: t('Count'),
+          gridTemplate: 'min-content',
+          cellProps: { align: 'right' },
+          getValue: event => event.count ?? null,
+          render: event => event.count ?? '-',
+        },
+        {
+          id: 'last-seen',
           label: t('Last Seen'),
-          getter: event => <DateLabel date={event.lastOccurrence} format="mini" />,
-          cellProps: { style: { textAlign: 'right' } },
-          gridTemplate: 'minmax(150px, 0.5fr)',
-          sort: (e1: Event, e2: Event) => {
-            const date1 = e1.lastTimestamp || e1.metadata.creationTimestamp;
-            const date2 = e2.lastTimestamp || e2.metadata.creationTimestamp;
-            return new Date(date2).getTime() - new Date(date1).getTime();
-          },
+          gridTemplate: 'min-content',
+          cellProps: { align: 'right' },
+          getValue: event => -new Date(event.lastOccurrence).getTime(),
+          render: event => <DateLabel date={event.lastOccurrence} format="mini" />,
         },
       ]}
       filterFunction={warningActionFilterFunc}
-      defaultSortingColumn={6}
+      defaultSortingColumn={{ id: 'last-seen', desc: false }}
       id="headlamp-cluster.overview.events"
     />
   );

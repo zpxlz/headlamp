@@ -1,38 +1,118 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { KubeObject } from '../../lib/k8s/cluster';
 import Event, { KubeEvent } from '../../lib/k8s/event';
+import { KubeObject } from '../../lib/k8s/KubeObject';
 import { localeDate, timeAgo } from '../../lib/util';
 import { HeadlampEventType, useEventCallback } from '../../redux/headlampEventSlice';
-import { HoverInfoLabel, SectionBox, SimpleTable } from '../common';
+import EventsLifetimeInfo from '../common/EventsLifetimeInfo';
+import { HoverInfoLabel } from '../common/Label';
+import SectionBox from '../common/SectionBox';
+import SimpleTable from '../common/SimpleTable';
 import ShowHideLabel from './ShowHideLabel';
 
 export interface ObjectEventListProps {
   object: KubeObject;
+  events?: Event[];
+}
+
+function getObjectEventsKey(object: KubeObject | null) {
+  if (!object) {
+    return '';
+  }
+
+  return [
+    object.cluster,
+    object.kind,
+    object.metadata.namespace,
+    object.metadata.name,
+    object.metadata.uid,
+  ]
+    .filter(Boolean)
+    .join('/');
+}
+
+export function useObjectEvents(object: KubeObject | null) {
+  const [events, setEvents] = useState<Event[]>([]);
+  const objectKey = getObjectEventsKey(object);
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function fetchEvents() {
+      const currentObject = object;
+      setEvents(previousEvents => (previousEvents.length === 0 ? previousEvents : []));
+
+      if (!currentObject) {
+        return;
+      }
+
+      try {
+        const events = await Event.objectEvents(currentObject);
+        if (!canceled) {
+          setEvents(events.map((e: KubeEvent) => new Event(e, currentObject.cluster)));
+        }
+      } catch (e) {
+        console.error('Failed to fetch events for object:', currentObject, e);
+        if (!canceled) {
+          setEvents([]);
+        }
+      }
+    }
+
+    fetchEvents();
+
+    return () => {
+      canceled = true;
+    };
+    // Use stable Kubernetes identity fields because callers can recreate wrappers each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectKey]);
+
+  return events;
 }
 
 export default function ObjectEventList(props: ObjectEventListProps) {
-  const [events, setEvents] = useState<Event[]>([]);
+  const fetchedEvents = useObjectEvents(props.events === undefined ? props.object : null);
+  const events = props.events ?? fetchedEvents;
   const dispatchEventList = useEventCallback(HeadlampEventType.OBJECT_EVENTS);
+  // Stable identity so a changed object re-dispatches even when events stays
+  // referentially equal (e.g. an empty array reused across objects).
+  const objectKey = getObjectEventsKey(props.object);
 
   useEffect(() => {
     if (events) {
       dispatchEventList(events, props.object);
     }
-  }, [events]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, objectKey]);
 
-  async function fetchEvents() {
-    const events = await Event.objectEvents(props.object);
-    setEvents(events.map((e: KubeEvent) => new Event(e)));
-  }
   const { t } = useTranslation(['translation', 'glossary']);
 
-  useEffect(() => {
-    fetchEvents();
-  }, []);
-
   return (
-    <SectionBox title={t('glossary|Events')}>
+    <SectionBox
+      title={t('glossary|Events')}
+      headerProps={{
+        noPadding: false,
+        headerStyle: 'subsection',
+        titleSideActions: [<EventsLifetimeInfo key="event-lifetime-info" />],
+      }}
+    >
       <SimpleTable
         columns={[
           {
@@ -68,11 +148,6 @@ export default function ObjectEventList(props: ObjectEventListProps) {
           {
             label: t('Age'),
             getter: item => {
-              if (item.count > 1) {
-                return `${timeAgo(item.lastOccurrence)} (${item.count} times over ${timeAgo(
-                  item.firstOccurrence
-                )})`;
-              }
               const eventDate = timeAgo(item.lastOccurrence, { format: 'mini' });
               let label: string;
               if (item.count > 1) {
@@ -93,8 +168,7 @@ export default function ObjectEventList(props: ObjectEventListProps) {
                 />
               );
             },
-            sort: (n1: KubeEvent, n2: KubeEvent) =>
-              new Date(n2.lastTimestamp).getTime() - new Date(n1.lastTimestamp).getTime(),
+            sort: (item: Event) => -new Date(item.lastOccurrence).getTime(),
           },
         ]}
         data={events}

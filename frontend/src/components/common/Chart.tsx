@@ -1,44 +1,48 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
 import { useTheme } from '@mui/material/styles';
+import { styled } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
-import makeStyles from '@mui/styles/makeStyles';
-import React from 'react';
+import React, { ReactNode } from 'react';
+import { useRef } from 'react';
+import ReactDOM from 'react-dom';
 import {
   Bar,
   BarChart,
+  Cell,
   Label,
   Pie,
   PieChart,
   ResponsiveContainer,
+  Sector,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import Loader from './Loader';
 
-const useStyle = makeStyles(() => ({
-  title: {
-    textAlign: 'center',
-    fontSize: '1.2em',
-    flexGrow: 1,
-    fontWeight: 'bold',
-  },
-  legend: {
-    textAlign: 'center',
-    fontSize: '1.1em',
-    flexGrow: 1,
-  },
-  chart: {
-    marginLeft: 'auto',
-    marginRight: 'auto',
-  },
-}));
-
 export interface ChartDataPoint {
   name: string;
+  label?: string;
   value: number;
   fill?: string;
+  onClick?: (data?: any) => void;
 }
 
 export interface PercentageCircleProps {
@@ -46,8 +50,10 @@ export interface PercentageCircleProps {
   size?: number;
   dataKey?: string;
   label?: string | null;
-  title?: string | null;
-  legend?: string | null;
+  title?: ReactNode;
+  /** Name used in the loader's accessible label. Defaults to the title. */
+  loaderTitle?: string;
+  legend?: ReactNode;
   total?: number;
   totalProps?: {
     [propName: string]: any;
@@ -57,13 +63,13 @@ export interface PercentageCircleProps {
 
 export function PercentageCircle(props: PercentageCircleProps) {
   const theme = useTheme();
-  const classes = useStyle();
   const {
     data,
     size = 200,
     dataKey = 'percentage',
     label = '',
     title = '',
+    loaderTitle,
     legend = null,
     total = 100,
     totalProps = {},
@@ -72,6 +78,13 @@ export function PercentageCircle(props: PercentageCircleProps) {
 
   const chartSize = size * 0.8;
   const isLoading = total < 0;
+
+  const chartLoadingTitle =
+    loaderTitle ||
+    (typeof title === 'string' && title.trim() ? title.trim() : '') ||
+    (typeof label === 'string' && label.trim() && label !== '…' ? label.trim() : '');
+
+  const loaderLabel = chartLoadingTitle ? `Loading data for ${chartLoadingTitle}` : 'Loading data';
 
   function formatData() {
     let filledValue = 0;
@@ -89,19 +102,100 @@ export function PercentageCircle(props: PercentageCircleProps) {
         ? {
             name: 'total',
             percentage: 100,
-            value: total,
-            fill: theme.palette.chartStyles.defaultFillColor,
+            value: 0,
+            fill: theme.palette?.chartStyles?.defaultFillColor,
           }
         : {
             name: 'total',
             percentage: ((total - filledValue) / total) * 100,
-            value: total,
-            fill: theme.palette.chartStyles.defaultFillColor,
+            value: total - filledValue,
+            fill: theme.palette?.chartStyles?.defaultFillColor,
             ...totalProps,
           };
 
     return formattedData.concat(totalValue);
   }
+
+  const renderCustomSector = (sectorProps: any) => {
+    const {
+      cx,
+      cy,
+      innerRadius,
+      outerRadius,
+      startAngle,
+      endAngle,
+      fill: sectorFill,
+      stroke,
+      payload,
+      index,
+    } = sectorProps;
+
+    const onClick = payload?.onClick;
+    const isInteractive = !!onClick;
+    const labelName = payload?.label || payload?.name || '';
+    // The empty-chart placeholder has value 0 but percentage 100, so omit the percentage for 0.
+    const pct =
+      typeof payload?.percentage === 'number' && payload?.value !== 0
+        ? `${Math.round(payload.percentage)}%`
+        : '';
+    const val = typeof payload?.value === 'number' ? `${payload.value}` : '';
+    const accessibleLabel =
+      labelName && val
+        ? `${labelName}: ${val}${pct ? ` (${pct})` : ''}`
+        : labelName && pct
+        ? `${labelName} (${pct})`
+        : labelName || `slice-${index}`;
+
+    const fill =
+      payload?.fill ||
+      sectorFill ||
+      theme.palette?.chartStyles?.fillColor ||
+      theme.palette?.common?.black;
+
+    if (isInteractive) {
+      return (
+        <g
+          tabIndex={0}
+          role="button"
+          aria-label={accessibleLabel}
+          style={{ cursor: 'pointer' }}
+          onClick={onClick}
+          onKeyDown={(e: React.KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onClick(e);
+            }
+          }}
+        >
+          <Sector
+            cx={cx}
+            cy={cy}
+            innerRadius={innerRadius}
+            outerRadius={outerRadius}
+            startAngle={startAngle}
+            endAngle={endAngle}
+            fill={fill}
+            stroke={stroke}
+            aria-label={accessibleLabel}
+          />
+        </g>
+      );
+    }
+
+    return (
+      <Sector
+        cx={cx}
+        cy={cy}
+        innerRadius={innerRadius}
+        outerRadius={outerRadius}
+        startAngle={startAngle}
+        endAngle={endAngle}
+        fill={fill}
+        stroke={stroke}
+        aria-label={accessibleLabel}
+      />
+    );
+  };
 
   return (
     <Box
@@ -112,18 +206,35 @@ export function PercentageCircle(props: PercentageCircleProps) {
       alignContent="center"
       mx="auto"
     >
-      {title && <Typography className={classes.title}>{title}</Typography>}
+      {title && (
+        <Typography
+          sx={{
+            textAlign: 'center',
+            fontSize: '1.2em',
+            flexGrow: 1,
+            fontWeight: 'bold',
+          }}
+        >
+          {title}
+        </Typography>
+      )}
       {isLoading ? (
-        <Loader title={`Loading data for ${title}`} />
+        <Loader title={loaderLabel} />
       ) : (
         <PieChart
           cx={size / 2}
           cy={size / 2}
           width={chartSize}
           height={chartSize}
-          className={classes.chart}
+          style={{
+            marginLeft: 'auto',
+            marginRight: 'auto',
+          }}
+          accessibilityLayer
         >
           <Pie
+            aria-label={label || '0%'}
+            isAnimationActive={false}
             data={formatData()}
             // Center the chart
             cx={chartSize / 2}
@@ -134,48 +245,72 @@ export function PercentageCircle(props: PercentageCircleProps) {
             // Start at the top
             startAngle={90}
             endAngle={-270}
-            stroke={theme.palette.chartStyles.defaultFillColor}
-            fill={theme.palette.chartStyles.fillColor || theme.palette.common.black}
+            stroke={theme.palette?.chartStyles?.defaultFillColor}
+            fill={theme.palette?.chartStyles?.fillColor || theme.palette?.common?.black}
+            activeIndex={formatData().flatMap((entry, index) =>
+              entry.percentage > 0 && Number.isFinite(entry.percentage) ? [index] : []
+            )}
+            activeShape={renderCustomSector}
           >
+            {formatData().map((entry, index) => {
+              return (
+                <Cell
+                  key={`cell-${index}`}
+                  fill={
+                    entry.fill ||
+                    theme.palette?.chartStyles?.fillColor ||
+                    theme.palette?.common?.black
+                  }
+                />
+              );
+            })}
             <Label
               value={label || ''}
               position="center"
               style={{
                 fontSize: `${chartSize * 0.15}px`,
-                fill: theme.palette.chartStyles.labelColor,
+                fill: theme.palette?.chartStyles?.labelColor,
               }}
             />
           </Pie>
         </PieChart>
       )}
       {!isLoading && legend !== null && (
-        <Typography className={classes.legend}>{legend}</Typography>
+        <Typography
+          sx={{
+            textAlign: 'center',
+            fontSize: '1.1em',
+            flexGrow: 1,
+          }}
+        >
+          {legend}
+        </Typography>
       )}
     </Box>
   );
 }
 
-const useBarStyle = makeStyles(theme => ({
-  chart: {
-    zIndex: theme.zIndex.drawer,
-  },
-  container: {
-    marginLeft: 'auto',
-    marginRight: 'auto',
-  },
+const StyledResponsiveContainer = styled(ResponsiveContainer)({
+  marginLeft: 'auto',
+  marginRight: 'auto',
+});
+
+const StyledBarChart = styled(BarChart)(({ theme }) => ({
+  zIndex: theme.zIndex.drawer,
 }));
 
 export interface PercentageBarProps {
   data: ChartDataPoint[];
   total?: number;
-  tooltipFunc?: ((data: any) => JSX.Element | string) | null;
+  tooltipFunc?: ((data: any) => ReactNode) | null;
 }
 
 export function PercentageBar(props: PercentageBarProps) {
-  const classes = useBarStyle();
   const theme = useTheme();
 
   const { data, total = 100, tooltipFunc = null } = props;
+
+  const containerRef = useRef<HTMLDivElement>(null);
 
   function formatData() {
     const dataItems: { [name: string]: number } = {};
@@ -187,10 +322,27 @@ export function PercentageBar(props: PercentageBarProps) {
     return dataItems;
   }
 
+  const barBackground =
+    theme.palette.mode === 'dark' ? theme.palette.grey[800] : theme.palette.grey[300];
+
+  const barColor =
+    theme.palette.mode === 'dark' ? theme.palette.primary.light : theme.palette.primary.main;
+
   return (
-    <ResponsiveContainer width="95%" height={20} className={classes.container}>
-      <BarChart layout="vertical" maxBarSize={5} data={[formatData()]} className={classes.chart}>
-        {tooltipFunc && <Tooltip content={<PaperTooltip>{tooltipFunc(data)}</PaperTooltip>} />}
+    <StyledResponsiveContainer width="95%" height={20} ref={containerRef}>
+      <StyledBarChart layout="vertical" maxBarSize={5} data={[formatData()]}>
+        {tooltipFunc && (
+          <Tooltip
+            content={props => (
+              <PaperTooltip
+                rechartsProps={props}
+                tooltipFunc={tooltipFunc}
+                data={data}
+                containerRef={containerRef}
+              />
+            )}
+          />
+        )}
         <XAxis hide domain={[0, 100]} type="number" />
         <YAxis hide type="category" />
         {data.map((item, index) => {
@@ -199,21 +351,50 @@ export function PercentageBar(props: PercentageBarProps) {
               key={index}
               dataKey={item.name}
               stackId="1"
-              fill={item.fill || theme.palette.primary.main}
+              fill={item.fill || barColor}
               layout="vertical"
-              background={{ fill: theme.palette.grey['300'] }}
+              radius={theme.shape.borderRadius}
+              background={{ fill: barBackground }}
             />
           );
         })}
-      </BarChart>
-    </ResponsiveContainer>
+      </StyledBarChart>
+    </StyledResponsiveContainer>
   );
 }
 
-function PaperTooltip(props: React.PropsWithChildren<{}>) {
-  return (
-    <Paper className="custom-tooltip">
-      <Box m={1}>{props.children}</Box>
-    </Paper>
+interface PaperTooltipProps {
+  rechartsProps?: any;
+  tooltipFunc: (data: any) => ReactNode;
+  data: any;
+  containerRef: React.RefObject<HTMLDivElement>;
+}
+
+function PaperTooltip({ rechartsProps, tooltipFunc, data, containerRef }: PaperTooltipProps) {
+  if (!rechartsProps || !rechartsProps.active || !rechartsProps.coordinate) return null;
+
+  // eslint-disable-next-line react-hooks/refs
+  const rect = containerRef.current?.getBoundingClientRect();
+
+  const { x, y } = rechartsProps.coordinate;
+  const left = (rect?.left || 0) + x;
+  const top = (rect?.top ?? 0) + y - 5;
+
+  return ReactDOM.createPortal(
+    <Paper
+      className="custom-tooltip"
+      style={{
+        position: 'fixed',
+        left,
+        top,
+        zIndex: 1500,
+        pointerEvents: 'none',
+        minWidth: 120,
+        transform: 'translate(-50%, -100%)',
+      }}
+    >
+      <Box m={1}>{tooltipFunc(data)}</Box>
+    </Paper>,
+    document.body
   );
 }

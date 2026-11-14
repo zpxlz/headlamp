@@ -1,8 +1,6 @@
----
-title: "Interface: KubeNode"
-linkTitle: "KubeNode"
-slug: "lib_k8s_node.KubeNode"
----
+[API](../API.md) / [lib/k8s/node](../modules/lib_k8s_node.md) / KubeNode
+
+# Interface: KubeNode
 
 [lib/k8s/node](../modules/lib_k8s_node.md).KubeNode
 
@@ -24,7 +22,7 @@ slug: "lib_k8s_node.KubeNode"
 
 #### Defined in
 
-[lib/k8s/cluster.ts:55](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/lib/k8s/cluster.ts#L55)
+[lib/k8s/cluster.ts:56](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/lib/k8s/cluster.ts#L56)
 
 ___
 
@@ -47,7 +45,7 @@ Cannot be updated.
 
 #### Defined in
 
-[lib/k8s/cluster.ts:54](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/lib/k8s/cluster.ts#L54)
+[lib/k8s/cluster.ts:55](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/lib/k8s/cluster.ts#L55)
 
 ___
 
@@ -61,7 +59,7 @@ ___
 
 #### Defined in
 
-[lib/k8s/cluster.ts:56](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/lib/k8s/cluster.ts#L56)
+[lib/k8s/cluster.ts:57](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/lib/k8s/cluster.ts#L57)
 
 ___
 
@@ -78,10 +76,11 @@ ___
 | Name | Type |
 | :------ | :------ |
 | `podCIDR` | `string` |
+| `taints` | { `effect`: `string` ; `key`: `string`  }[] |
 
 #### Defined in
 
-[lib/k8s/node.ts:33](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/lib/k8s/node.ts#L33)
+[lib/k8s/node.ts:45](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/lib/k8s/node.ts#L45)
 
 ___
 
@@ -94,9 +93,20 @@ ___
 | Name | Type |
 | :------ | :------ |
 | `addresses` | { `address`: `string` ; `type`: `string`  }[] |
-| `capacity` | { `cpu`: `any` ; `memory`: `any`  } |
+| `allocatable` | { `cpu`: `any` ; `ephemeralStorage`: `any` ; `hugepages_1Gi`: `any` ; `hugepages_2Mi`: `any` ; `memory`: `any` ; `pods`: `any`  } |
+| `allocatable.cpu` | `any` |
+| `allocatable.ephemeralStorage` | `any` |
+| `allocatable.hugepages_1Gi` | `any` |
+| `allocatable.hugepages_2Mi` | `any` |
+| `allocatable.memory` | `any` |
+| `allocatable.pods` | `any` |
+| `capacity` | { `cpu`: `any` ; `ephemeralStorage`: `any` ; `hugepages_1Gi`: `any` ; `hugepages_2Mi`: `any` ; `memory`: `any` ; `pods`: `any`  } |
 | `capacity.cpu` | `any` |
+| `capacity.ephemeralStorage` | `any` |
+| `capacity.hugepages_1Gi` | `any` |
+| `capacity.hugepages_2Mi` | `any` |
 | `capacity.memory` | `any` |
+| `capacity.pods` | `any` |
 | `conditions` | `Omit`<[`KubeCondition`](lib_k8s_cluster.KubeCondition.md), ``"lastProbeTime"`` \| ``"lastUpdateTime"``\> & { `lastHeartbeatTime`: `string`  }[] |
 | `nodeInfo` | { `architecture`: `string` ; `bootID`: `string` ; `containerRuntimeVersion`: `string` ; `kernelVersion`: `string` ; `kubeProxyVersion`: `string` ; `kubeletVersion`: `string` ; `machineID`: `string` ; `operatingSystem`: `string` ; `osImage`: `string` ; `systemUUID`: `string`  } |
 | `nodeInfo.architecture` | `string` |
@@ -112,4 +122,4 @@ ___
 
 #### Defined in
 
-[lib/k8s/node.ts:8](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/lib/k8s/node.ts#L8)
+[lib/k8s/node.ts:8](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/lib/k8s/node.ts#L8)

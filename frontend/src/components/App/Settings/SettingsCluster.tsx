@@ -1,49 +1,87 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon, InlineIcon } from '@iconify/react';
-import { Box, Chip, IconButton, TextField } from '@mui/material';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
+import IconButton from '@mui/material/IconButton';
 import { useTheme } from '@mui/material/styles';
-import makeStyles from '@mui/styles/makeStyles';
-import React from 'react';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import { useSnackbar } from 'notistack';
+import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch } from 'react-redux';
-import { useHistory } from 'react-router-dom';
-import helpers, { ClusterSettings } from '../../../helpers';
+import { useHistory, useLocation } from 'react-router-dom';
+import { sanitizeCssColor } from '../../../helpers/clusterAppearance';
+import { isElectron } from '../../../helpers/isElectron';
 import { useCluster, useClustersConf } from '../../../lib/k8s';
-import { deleteCluster } from '../../../lib/k8s/apiProxy';
+import { useAllowedNamespacesFromSelector } from '../../../lib/k8s/allowedNamespaces';
+import { deleteCluster } from '../../../lib/k8s/api/v1/clusterApi';
 import { setConfig } from '../../../redux/configSlice';
-import { Link, NameValueTable, SectionBox } from '../../common';
+import { HeadlampEventType, useEventCallback } from '../../../redux/headlampEventSlice';
 import ConfirmButton from '../../common/ConfirmButton';
-
-const useStyles = makeStyles(() => ({
-  input: {
-    maxWidth: 250,
-  },
-}));
-
-function isValidNamespaceFormat(namespace: string) {
-  // We allow empty strings just because that's the default value in our case.
-  if (!namespace) {
-    return true;
-  }
-
-  // Validates that the namespace is a valid DNS-1123 label and returns a boolean.
-  // https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#dns-label-names
-  const regex = new RegExp('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$');
-  return regex.test(namespace);
-}
+import Empty from '../../common/EmptyContent';
+import Link from '../../common/Link';
+import Loader from '../../common/Loader';
+import NameValueTable from '../../common/NameValueTable';
+import SectionBox from '../../common/SectionBox';
+import { ClusterNameEditor } from './ClusterNameEditor';
+import ClusterSelector from './ClusterSelector';
+import ColorPicker from './ColorPicker';
+import IconPicker from './IconPicker';
+import NodeShellSettings from './NodeShellSettings';
+import PodDebugSettings from './PodDebugSettings';
+import { useClusterSettings } from './useClusterSettings';
+import { isValidNamespaceFormat } from './util';
 
 export default function SettingsCluster() {
-  const cluster = useCluster();
   const clusterConf = useClustersConf();
+  const clusters = Object.values(clusterConf || {})
+    .map(cluster => cluster.name)
+    .sort((a, b) => a.localeCompare(b));
   const { t } = useTranslation(['translation']);
-  const [defaultNamespace, setDefaultNamespace] = React.useState('default');
-  const [userDefaultNamespace, setUserDefaultNamespace] = React.useState('');
+  const initialCluster = useCluster() || '';
+  const [cluster, setCluster] = React.useState(initialCluster);
+
+  const [clusterSettings, setClusterSettings] = useClusterSettings(cluster);
+
   const [newAllowedNamespace, setNewAllowedNamespace] = React.useState('');
-  const [clusterSettings, setClusterSettings] = React.useState<ClusterSettings | null>(null);
-  const classes = useStyles();
+  const [namespacesSelectorInput, setNamespacesSelectorInput] = React.useState(
+    clusterSettings.allowedNamespacesSelector || ''
+  );
+  const [colorPickerOpen, setColorPickerOpen] = React.useState(false);
+  const [iconPickerOpen, setIconPickerOpen] = React.useState(false);
+
   const theme = useTheme();
 
   const history = useHistory();
   const dispatch = useDispatch();
+  const location = useLocation();
+  const { enqueueSnackbar } = useSnackbar();
+  const dispatchHeadlampEvent = useEventCallback(HeadlampEventType.CLUSTER_SETTINGS_VIEW);
+
+  React.useEffect(() => {
+    if (!cluster) {
+      return;
+    }
+    dispatchHeadlampEvent({ cluster });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cluster]);
 
   const removeCluster = () => {
     deleteCluster(cluster || '')
@@ -52,9 +90,13 @@ export default function SettingsCluster() {
         history.push('/');
       })
       .catch((err: Error) => {
-        if (err.message === 'Not Found') {
-          // TODO: create notification with error message
-        }
+        enqueueSnackbar(
+          t('translation|Failed to delete cluster: {{ error }}', { error: err.message }),
+          {
+            variant: 'error',
+            preventDuplicate: true,
+          }
+        );
       });
   };
 
@@ -68,61 +110,83 @@ export default function SettingsCluster() {
     return clusterInfo?.meta_data?.source === 'dynamic_cluster';
   }, [cluster, clusterConf]);
 
-  React.useEffect(() => {
-    setClusterSettings(!!cluster ? helpers.loadClusterSettings(cluster || '') : null);
-  }, [cluster]);
+  const appearanceAccentColor = sanitizeCssColor(clusterSettings.appearance?.accentColor) || '';
+  const appearanceIcon = clusterSettings.appearance?.icon || '';
 
-  React.useEffect(() => {
-    const clusterInfo = (clusterConf && clusterConf[cluster || '']) || null;
-    const clusterConfNs = clusterInfo?.meta_data?.namespace;
-    if (!!clusterConfNs && clusterConfNs !== defaultNamespace) {
-      setDefaultNamespace(clusterConfNs);
-    }
-  }, [cluster, clusterConf]);
-
-  React.useEffect(() => {
-    if (clusterSettings?.defaultNamespace !== userDefaultNamespace) {
-      setUserDefaultNamespace(clusterSettings?.defaultNamespace || '');
-    }
-
-    // Avoid re-initializing settings as {} just because the cluster is not yet set.
-    if (clusterSettings !== null) {
-      helpers.storeClusterSettings(cluster || '', clusterSettings);
-    }
-  }, [cluster, clusterSettings]);
-
-  React.useEffect(() => {
-    let timeoutHandle: NodeJS.Timeout | null = null;
-
-    if (isEditingDefaultNamespace()) {
-      // We store the namespace after a timeout.
-      timeoutHandle = setTimeout(() => {
-        if (isValidNamespaceFormat(userDefaultNamespace)) {
-          storeNewDefaultNamespace(userDefaultNamespace);
-        }
-      }, 1000);
-    }
-
-    return () => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-        timeoutHandle = null;
-      }
-    };
-  }, [userDefaultNamespace]);
-
-  function isEditingDefaultNamespace() {
-    return clusterSettings?.defaultNamespace !== userDefaultNamespace;
+  function updateAppearance(patch: { accentColor?: string; icon?: string }) {
+    setClusterSettings(s => ({
+      ...s,
+      appearance: { ...s.appearance, ...patch },
+    }));
   }
 
-  if (!cluster) {
-    return null;
+  const clusterFromUrl = useMemo(
+    () => new URLSearchParams(location.search).get('c'),
+    [location.search]
+  );
+
+  React.useLayoutEffect(() => {
+    if (clusterFromUrl && clusters.includes(clusterFromUrl)) {
+      setCluster(clusterFromUrl);
+    } else if (clusters.length > 0 && !clusterFromUrl) {
+      history.replace(`/settings/cluster?c=${clusters[0]}`);
+    } else {
+      setCluster('');
+    }
+  }, [clusters, history, clusterFromUrl]);
+
+  const clusterInfo = (clusterConf && clusterConf[cluster || '']) || null;
+  const placeholderNamespace = clusterInfo?.meta_data?.namespace || 'default';
+  const defaultNamespace = clusterSettings.defaultNamespace || '';
+
+  const [defaultNamespaceInput, setDefaultNamespaceInput] = React.useState(defaultNamespace);
+  React.useEffect(() => {
+    setDefaultNamespaceInput(defaultNamespace);
+  }, [defaultNamespace]);
+
+  const allowedNamespacesSelector = clusterSettings.allowedNamespacesSelector || '';
+  React.useEffect(() => {
+    setNamespacesSelectorInput(allowedNamespacesSelector);
+  }, [allowedNamespacesSelector, cluster]);
+
+  // Resolve the configured selector (via Namespace.useList) and keep the cache in
+  // sync. The resolution is keyed on the persisted selector, so it re-runs after
+  // applyNamespacesSelector persists a new value.
+  const namespacesSelectorResolution = useAllowedNamespacesFromSelector(
+    cluster,
+    allowedNamespacesSelector
+  );
+  const namespacesSelectorError = namespacesSelectorResolution.error
+    ? t('translation|Failed to fetch namespaces for this selector: {{ error }}', {
+        error: namespacesSelectorResolution.error.message,
+      })
+    : '';
+  // A valid selector that resolved to no namespaces: warn the user so an empty
+  // list is not mistaken for a still-loading or misconfigured state.
+  const namespacesSelectorMatchedNothing =
+    !!allowedNamespacesSelector &&
+    namespacesSelectorResolution.isSuccess &&
+    namespacesSelectorResolution.namespaces.length === 0;
+
+  function applyNamespacesSelector(selector: string) {
+    const trimmedSelector = selector.trim();
+    // Persist the selector only; the resolution (and cache update) is handled by
+    // useAllowedNamespacesFromSelector, which reacts to this change.
+    setClusterSettings(settings => {
+      const newSettings = { ...settings };
+      if (trimmedSelector) {
+        newSettings.allowedNamespacesSelector = trimmedSelector;
+      } else {
+        delete newSettings.allowedNamespacesSelector;
+      }
+      return newSettings;
+    });
   }
 
   function storeNewAllowedNamespace(namespace: string) {
     setNewAllowedNamespace('');
-    setClusterSettings((settings: ClusterSettings | null) => {
-      const newSettings = { ...(settings || {}) };
+    setClusterSettings(settings => {
+      const newSettings = { ...settings };
       newSettings.allowedNamespaces = newSettings.allowedNamespaces || [];
       newSettings.allowedNamespaces.push(namespace);
       // Sort and avoid duplicates
@@ -131,63 +195,199 @@ export default function SettingsCluster() {
     });
   }
 
-  function storeNewDefaultNamespace(namespace: string) {
-    let actualNamespace = namespace;
-    if (namespace === defaultNamespace) {
-      actualNamespace = '';
-      setUserDefaultNamespace(actualNamespace);
-    }
-
-    setClusterSettings((settings: ClusterSettings | null) => {
-      const newSettings = { ...(settings || {}) };
-      if (isValidNamespaceFormat(namespace)) {
-        newSettings.defaultNamespace = actualNamespace;
-      }
-      return newSettings;
-    });
-  }
-
-  const isValidDefaultNamespace = isValidNamespaceFormat(userDefaultNamespace);
+  const isValidDefaultNamespace = isValidNamespaceFormat(defaultNamespaceInput);
   const isValidNewAllowedNamespace = isValidNamespaceFormat(newAllowedNamespace);
   const invalidNamespaceMessage = t(
     "translation|Namespaces must contain only lowercase alphanumeric characters or '-', and must start and end with an alphanumeric character."
   );
 
+  // If we don't have yet a cluster name from the URL, we are still loading.
+  if (!clusterFromUrl) {
+    return <Loader title={t('Loading')} />;
+  }
+
+  if (clusters.length === 0) {
+    return (
+      <>
+        <SectionBox title={t('translation|Cluster Settings')} backLink />
+        <Empty color={theme.palette.mode === 'dark' ? 'error.light' : 'error.main'}>
+          {t('translation|There seem to be no clusters configured…')}
+        </Empty>
+      </>
+    );
+  }
+
+  if (!cluster) {
+    return (
+      <>
+        <SectionBox title={t('translation|Cluster Settings')} backLink>
+          <Typography
+            color={theme.palette.mode === 'dark' ? 'error.light' : 'error.main'}
+            component="h3"
+            variant="h6"
+          >
+            {t(
+              'translation|Cluster {{ clusterName }} does not exist. Please select a valid cluster:',
+              {
+                clusterName: clusterFromUrl,
+              }
+            )}
+          </Typography>
+          <ClusterSelector currentCluster={cluster} clusters={clusters} />
+        </SectionBox>
+      </>
+    );
+  }
+
+  const defaultNamespaceLabelID = 'default-namespace-label';
+  const allowedNamespaceLabelID = 'allowed-namespace-label';
+  const allowedNamespacesSelectorLabelID = 'allowed-namespaces-selector-label';
+  const appearanceLabelID = 'cluster-appearance-label';
+  const accentColorLabelID = 'accent-color-label';
+  const clusterIconLabelID = 'cluster-icon-label';
+  const colorButtonID = 'color-picker-button';
+  const iconButtonID = 'icon-picker-button';
+
   return (
     <>
-      <SectionBox
-        title={
-          Object.keys(clusterConf || {}).length > 1
-            ? t('translation|Cluster Settings ({{ clusterName }})', { clusterName: cluster || '' })
-            : t('translation|Cluster Settings')
-        }
-        backLink
-        headerProps={{
-          actions: [
-            <Link
-              routeName={'settings'}
-              align="right"
-              style={{ color: theme.palette.text.primary }}
-            >
-              {t('translation|General Settings')}
-            </Link>,
-          ],
-        }}
-      >
+      <SectionBox title={t('translation|Cluster Settings')} backLink>
+        <Box display="flex" justifyContent="space-between" alignItems="center">
+          <ClusterSelector clusters={clusters} currentCluster={cluster} />
+          <Link
+            routeName="cluster"
+            params={{ cluster: cluster }}
+            tooltip={t('translation|Go to cluster')}
+          >
+            {t('translation|Go to cluster')}
+          </Link>
+        </Box>
+        {isElectron() && (
+          <ClusterNameEditor
+            cluster={cluster}
+            clusterConf={clusterConf}
+            clusterSettings={clusterSettings}
+            setClusterSettings={setClusterSettings}
+          />
+        )}
+        <NameValueTable
+          rows={[
+            {
+              name: (
+                <Box>
+                  <Typography id={appearanceLabelID}>{t('translation|Appearance')}</Typography>
+                  <Typography variant="body2" color="textSecondary">
+                    {t("translation|Stored in your browser's localStorage (per-browser setting).")}
+                  </Typography>
+                </Box>
+              ),
+              value: (
+                <Box display="flex" flexDirection="column" gap={2} sx={{ minWidth: 280 }}>
+                  {/* Color Picker */}
+                  <Box>
+                    <Typography
+                      id={accentColorLabelID}
+                      variant="subtitle2"
+                      component="span"
+                      sx={{ mb: 1 }}
+                    >
+                      {t('translation|Accent color')}
+                    </Typography>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      {appearanceAccentColor && (
+                        <Box
+                          sx={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 1,
+                            backgroundColor: appearanceAccentColor,
+                            border: `1px solid ${theme.palette.divider}`,
+                          }}
+                        />
+                      )}
+                      <Button
+                        id={colorButtonID}
+                        variant="outlined"
+                        size="small"
+                        onClick={() => setColorPickerOpen(true)}
+                        startIcon={<Icon icon="mdi:palette" />}
+                        aria-labelledby={`${appearanceLabelID} ${accentColorLabelID} ${colorButtonID}`}
+                      >
+                        {appearanceAccentColor
+                          ? t('translation|Change Color')
+                          : t('translation|Choose Color')}
+                      </Button>
+                      {appearanceAccentColor && (
+                        <IconButton
+                          size="small"
+                          onClick={() => updateAppearance({ accentColor: '' })}
+                          aria-label={t('translation|Clear accent color')}
+                        >
+                          <Icon icon="mdi:close" />
+                        </IconButton>
+                      )}
+                    </Box>
+                  </Box>
+
+                  {/* Icon Picker */}
+                  <Box>
+                    <Typography
+                      id={clusterIconLabelID}
+                      variant="subtitle2"
+                      component="span"
+                      sx={{ mb: 1 }}
+                    >
+                      {t('translation|Cluster icon')}
+                    </Typography>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      {appearanceIcon && <Icon icon={appearanceIcon} width={24} />}
+                      <Button
+                        id={iconButtonID}
+                        variant="outlined"
+                        size="small"
+                        onClick={() => setIconPickerOpen(true)}
+                        startIcon={<Icon icon="mdi:emoticon-outline" />}
+                        aria-labelledby={`${appearanceLabelID} ${clusterIconLabelID} ${iconButtonID}`}
+                      >
+                        {appearanceIcon
+                          ? t('translation|Change Icon')
+                          : t('translation|Choose Icon')}
+                      </Button>
+                      {appearanceIcon && (
+                        <IconButton
+                          size="small"
+                          onClick={() => updateAppearance({ icon: '' })}
+                          aria-label={t('translation|Clear cluster icon')}
+                        >
+                          <Icon icon="mdi:close" />
+                        </IconButton>
+                      )}
+                    </Box>
+                  </Box>
+                </Box>
+              ),
+            },
+          ]}
+        />
         <NameValueTable
           rows={[
             {
               name: t('translation|Default namespace'),
+              nameID: defaultNamespaceLabelID,
               value: (
                 <TextField
                   onChange={event => {
-                    let value = event.target.value;
-                    value = value.replace(' ', '');
-                    setUserDefaultNamespace(value);
+                    const value = event.target.value.replace(' ', '');
+                    setDefaultNamespaceInput(value);
+                    if (isValidNamespaceFormat(value) || value === '') {
+                      setClusterSettings(s => ({ ...s, defaultNamespace: value }));
+                    }
                   }}
-                  value={userDefaultNamespace}
-                  placeholder={defaultNamespace}
+                  value={defaultNamespaceInput}
+                  placeholder={placeholderNamespace}
                   error={!isValidDefaultNamespace}
+                  inputProps={{
+                    'aria-labelledby': defaultNamespaceLabelID,
+                  }}
                   helperText={
                     isValidDefaultNamespace
                       ? t(
@@ -195,23 +395,20 @@ export default function SettingsCluster() {
                         )
                       : invalidNamespaceMessage
                   }
+                  variant="outlined"
+                  size="small"
                   InputProps={{
-                    endAdornment: isEditingDefaultNamespace() ? (
-                      <Icon
-                        width={24}
-                        color={theme.palette.text.secondary}
-                        icon="mdi:progress-check"
-                      />
-                    ) : (
-                      <Icon width={24} icon="mdi:check-bold" />
-                    ),
-                    className: classes.input,
+                    sx: { maxWidth: 250 },
                   }}
                 />
               ),
             },
             {
-              name: t('translation|Allowed namespaces'),
+              name: (
+                <Typography id={allowedNamespaceLabelID}>
+                  {t('translation|Allowed namespaces')}
+                </Typography>
+              ),
               value: (
                 <>
                   <TextField
@@ -220,7 +417,7 @@ export default function SettingsCluster() {
                       value = value.replace(' ', '');
                       setNewAllowedNamespace(value);
                     }}
-                    placeholder="namespace"
+                    placeholder={t('glossary|Namespace')}
                     error={!isValidNewAllowedNamespace}
                     value={newAllowedNamespace}
                     helperText={
@@ -232,10 +429,13 @@ export default function SettingsCluster() {
                     }
                     autoComplete="off"
                     inputProps={{
+                      'aria-labelledby': allowedNamespaceLabelID,
                       form: {
                         autocomplete: 'off',
                       },
                     }}
+                    variant="outlined"
+                    size="small"
                     InputProps={{
                       endAdornment: (
                         <IconButton
@@ -244,17 +444,18 @@ export default function SettingsCluster() {
                           }}
                           disabled={!newAllowedNamespace}
                           size="medium"
+                          aria-label={t('translation|Add namespace')}
                         >
                           <InlineIcon icon="mdi:plus-circle" />
                         </IconButton>
                       ),
-                      onKeyPress: event => {
+                      onKeyDown: event => {
                         if (event.key === 'Enter') {
                           storeNewAllowedNamespace(newAllowedNamespace);
                         }
                       },
                       autoComplete: 'off',
-                      className: classes.input,
+                      sx: { maxWidth: 250 },
                     }}
                   />
                   <Box
@@ -266,9 +467,8 @@ export default function SettingsCluster() {
                       },
                       marginTop: theme.spacing(1),
                     }}
-                    aria-label={t('translation|Allowed namespaces')}
                   >
-                    {((clusterSettings || {}).allowedNamespaces || []).map(namespace => (
+                    {(clusterSettings.allowedNamespaces || []).map(namespace => (
                       <Chip
                         key={namespace}
                         label={namespace}
@@ -289,10 +489,95 @@ export default function SettingsCluster() {
                 </>
               ),
             },
+            {
+              name: (
+                <Typography id={allowedNamespacesSelectorLabelID}>
+                  {t('translation|Allowed namespaces label selector')}
+                </Typography>
+              ),
+              value: (
+                <>
+                  <TextField
+                    onChange={event => {
+                      setNamespacesSelectorInput(event.target.value);
+                    }}
+                    placeholder={'team=frontend,env=prod'}
+                    error={!!namespacesSelectorError}
+                    value={namespacesSelectorInput}
+                    helperText={
+                      namespacesSelectorError ||
+                      t(
+                        'translation|A label selector used to automatically find the namespaces you are allowed to access in this cluster. Press Enter or the apply button to resolve it. The resolved namespaces are combined with the allowed namespaces list above.'
+                      )
+                    }
+                    autoComplete="off"
+                    inputProps={{
+                      'aria-labelledby': allowedNamespacesSelectorLabelID,
+                    }}
+                    variant="outlined"
+                    size="small"
+                    InputProps={{
+                      endAdornment: (
+                        <IconButton
+                          onClick={() => {
+                            applyNamespacesSelector(namespacesSelectorInput);
+                          }}
+                          disabled={
+                            namespacesSelectorResolution.isFetching ||
+                            namespacesSelectorInput.trim() === allowedNamespacesSelector
+                          }
+                          size="medium"
+                          aria-label={t('translation|Apply label selector')}
+                        >
+                          <InlineIcon icon="mdi:check-circle" />
+                        </IconButton>
+                      ),
+                      onKeyDown: event => {
+                        if (event.key === 'Enter') {
+                          applyNamespacesSelector(namespacesSelectorInput);
+                        }
+                      },
+                      autoComplete: 'off',
+                      sx: { maxWidth: 250 },
+                    }}
+                  />
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      '& > *': {
+                        margin: theme.spacing(0.5),
+                      },
+                      marginTop: theme.spacing(1),
+                    }}
+                  >
+                    {namespacesSelectorMatchedNothing ? (
+                      <Typography variant="body2" sx={{ color: 'warning.main' }}>
+                        {t('translation|No namespaces match this selector')}
+                      </Typography>
+                    ) : (
+                      namespacesSelectorResolution.namespaces.map(namespace => (
+                        <Chip key={namespace} label={namespace} size="small" clickable={false} />
+                      ))
+                    )}
+                  </Box>
+                </>
+              ),
+            },
           ]}
         />
       </SectionBox>
-      {removableCluster && helpers.isElectron() && (
+      <NodeShellSettings
+        cluster={cluster}
+        clusterSettings={clusterSettings}
+        setClusterSettings={setClusterSettings}
+      />
+      <PodDebugSettings
+        cluster={cluster}
+        clusterSettings={clusterSettings}
+        setClusterSettings={setClusterSettings}
+      />
+      {removableCluster && isElectron() && (
         <Box pt={2} textAlign="right">
           <ConfirmButton
             color="secondary"
@@ -307,6 +592,20 @@ export default function SettingsCluster() {
           </ConfirmButton>
         </Box>
       )}
+
+      <ColorPicker
+        open={colorPickerOpen}
+        currentColor={appearanceAccentColor}
+        onClose={() => setColorPickerOpen(false)}
+        onSelectColor={color => updateAppearance({ accentColor: color })}
+      />
+
+      <IconPicker
+        open={iconPickerOpen}
+        currentIcon={appearanceIcon}
+        onClose={() => setIconPickerOpen(false)}
+        onSelectIcon={icon => updateAppearance({ icon })}
+      />
     </>
   );
 }

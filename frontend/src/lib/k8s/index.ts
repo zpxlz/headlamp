@@ -1,91 +1,29 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { useQueries } from '@tanstack/react-query';
 import _ from 'lodash';
-import React from 'react';
-import { matchPath, useLocation } from 'react-router-dom';
+import React, { useMemo } from 'react';
 import { ConfigState } from '../../redux/configSlice';
-import { useTypedSelector } from '../../redux/reducers/reducers';
-import { getCluster, getClusterPrefixedPath } from '../util';
-import { ApiError, clusterRequest } from './apiProxy';
-import { Cluster, KubeObject, LabelSelector, StringDict } from './cluster';
-import ClusterRole from './clusterRole';
-import ClusterRoleBinding from './clusterRoleBinding';
-import ConfigMap from './configMap';
-import CustomResourceDefinition from './crd';
-import CronJob from './cronJob';
-import DaemonSet from './daemonSet';
-import Deployment from './deployment';
-import Endpoints from './endpoints';
-import HPA from './hpa';
-import Ingress from './ingress';
-import IngressClass from './ingressClass';
-import Job from './job';
-import { Lease } from './lease';
-import { LimitRange } from './limitRange';
-import Namespace from './namespace';
-import NetworkPolicy from './networkpolicy';
-import Node from './node';
-import PersistentVolume from './persistentVolume';
-import PersistentVolumeClaim from './persistentVolumeClaim';
-import Pod from './pod';
-import PodDisruptionBudget from './podDisruptionBudget';
-import PriorityClass from './priorityClass';
-import ReplicaSet from './replicaSet';
-import ResourceQuota from './resourceQuota';
-import Role from './role';
-import RoleBinding from './roleBinding';
-import { RuntimeClass } from './runtime';
-import Secret from './secret';
-import Service from './service';
-import ServiceAccount from './serviceAccount';
-import StatefulSet from './statefulSet';
-import StorageClass from './storageClass';
-
-const classList = [
-  ClusterRole,
-  ClusterRoleBinding,
-  ConfigMap,
-  CustomResourceDefinition,
-  CronJob,
-  DaemonSet,
-  Deployment,
-  Endpoints,
-  LimitRange,
-  Lease,
-  ResourceQuota,
-  HPA,
-  PodDisruptionBudget,
-  PriorityClass,
-  Ingress,
-  IngressClass,
-  Job,
-  Namespace,
-  NetworkPolicy,
-  Node,
-  PersistentVolume,
-  PersistentVolumeClaim,
-  Pod,
-  ReplicaSet,
-  Role,
-  RoleBinding,
-  RuntimeClass,
-  Secret,
-  Service,
-  ServiceAccount,
-  StatefulSet,
-  StorageClass,
-];
-
-const resourceClassesDict: {
-  [className: string]: KubeObject;
-} = {};
-
-classList.forEach(cls => {
-  // Ideally this should just be the class name, but until we ensure the class name is consistent
-  // (in what comes to the capitalization), we use this lazy approach.
-  const className: string = cls.className.charAt(0).toUpperCase() + cls.className.slice(1);
-  resourceClassesDict[className] = cls;
-});
-
-export const ResourceClasses = resourceClassesDict;
+import { useTypedSelector } from '../../redux/hooks';
+import { getCluster } from '../cluster';
+import { clusterRequest } from './api/v1/clusterRequests';
+import { ApiError } from './api/v2/ApiError';
+import { Cluster, LabelSelector, StringDict } from './cluster';
+export { ResourceClasses } from './resourceClasses';
 
 /** Hook for getting or fetching the clusters configuration.
  * This gets the clusters from the redux store. The redux store is updated
@@ -106,63 +44,24 @@ export function useClustersConf(): ConfigState['allClusters'] {
     Object.assign(allClusters, statelessClusters);
   }
 
-  return allClusters;
+  return useMemo(
+    () => (state.clusters === null ? null : allClusters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.clusters === null, Object.keys(allClusters).join(',')]
+  );
 }
 
-export function useCluster() {
-  // Make sure we update when changing clusters.
-  // @todo: We need a better way to do this.
-  const location = useLocation();
+export { useCluster, useConnectApi, useSelectedClusters } from './api/v1/hooks';
+export type { CancellablePromise } from './api/v1/hooks';
 
-  // This function is similar to the getCluster() but uses the location
-  // meaning it will return the URL from whatever the router used it (which
-  // is more accurate than getting it from window.location like the former).
-  function getClusterFromLocation(): string | null {
-    const urlPath = location?.pathname;
-    const clusterURLMatch = matchPath<{ cluster?: string }>(urlPath, {
-      path: getClusterPrefixedPath(),
-    });
-    return (!!clusterURLMatch && clusterURLMatch.params.cluster) || null;
-  }
-
-  const [cluster, setCluster] = React.useState<string | null>(getClusterFromLocation());
-
-  React.useEffect(() => {
-    const currentCluster = getClusterFromLocation();
-    if (cluster !== currentCluster) {
-      setCluster(currentCluster);
-    }
-  }, [cluster, location]);
-
-  return cluster;
-}
-
+/**
+ * Gets the version of the cluster given by the parameter.
+ *
+ * @param clusterName - the name of the cluster to query, or the currently selected cluster.
+ * @returns a promise that resolves to a dictionary containing version info.
+ */
 export function getVersion(clusterName: string = ''): Promise<StringDict> {
   return clusterRequest('/version', { cluster: clusterName || getCluster() });
-}
-
-export type CancellablePromise = Promise<() => void>;
-
-export function useConnectApi(...apiCalls: (() => CancellablePromise)[]) {
-  // Use the location to make sure the API calls are changed, as they may depend on the cluster
-  // (defined in the URL ATM).
-  const cluster = useCluster();
-
-  React.useEffect(
-    () => {
-      const cancellables = apiCalls.map(func => func());
-
-      return function cleanup() {
-        for (const cancellablePromise of cancellables) {
-          cancellablePromise.then(cancellable => cancellable());
-        }
-      };
-    },
-    // If we add the apiCalls to the dependency list, then it actually
-    // results in undesired reloads.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cluster]
-  );
 }
 
 /**
@@ -186,6 +85,13 @@ export function labelSelectorToQuery(labelSelector: LabelSelector) {
   return segments.join(',');
 }
 
+/**
+ * Simplifies a matchLabels object into an array of string expressions.
+ *
+ * @param matchLabels - the matchLabels object from a LabelSelector.
+ * @param isEqualSeperator - whether to use "=" as the separator instead of ":".
+ * @returns an array of simplified label strings, or an empty string.
+ */
 export function matchLabelsSimplifier(
   matchLabels: LabelSelector['matchLabels'],
   isEqualSeperator = false
@@ -206,6 +112,12 @@ export function matchLabelsSimplifier(
   return segments;
 }
 
+/**
+ * Simplifies a matchExpressions array into an array of string representations.
+ *
+ * @param matchExpressions - the matchExpressionss array from a LabelSelector.
+ * @returns an array of simplified expression strings, or an empty string.
+ */
 export function matchExpressionSimplifier(
   matchExpressions: LabelSelector['matchExpressions']
 ): string[] | '' {
@@ -278,92 +190,69 @@ export function matchExpressionSimplifier(
   return segments;
 }
 
+const versionFetchInterval = 10000; // ms
+
 /** Hook to get the version of the clusters given by the parameter.
  *
  * @param clusters
  * @returns a map with cluster -> version-info, and a map with cluster -> error.
  */
 export function useClustersVersion(clusters: Cluster[]) {
-  const [clusterNames, setClusterNames] = React.useState<string[]>(
-    Object.values(clusters).map(c => c.name)
+  type VersionInfo = {
+    version: StringDict | null;
+    error: ApiError | null;
+  };
+
+  const [clusterNames, setClusterNames] = React.useState<string[]>(() =>
+    Object.values(clusters)
+      .map(c => c.name)
+      .sort()
   );
-  const [versions, setVersions] = React.useState<{ [cluster: string]: StringDict }>({});
-  const [errors, setErrors] = React.useState<{ [cluster: string]: ApiError | null }>({});
-  const versionFetchInterval = 10000; // ms
-  const cancelledRef = React.useRef(false);
-  const lastUpdateRef = React.useRef(0);
 
+  // clusters gets a new array reference on every render; only update clusterNames when
+  // the actual set of names changes to avoid unnecessary query resets.
   React.useEffect(() => {
-    const newClusterNames = Object.values(clusters).map(c => c.name);
-    if (_.isEqual(newClusterNames, clusterNames)) {
-      return;
-    }
+    const nextClusterNames = Object.values(clusters)
+      .map(c => c.name)
+      .sort();
+    setClusterNames(prev => (_.isEqual(prev, nextClusterNames) ? prev : nextClusterNames));
+  }, [clusters]);
 
-    setClusterNames(newClusterNames);
-    lastUpdateRef.current = Date.now();
-  }, [clusters, clusterNames]);
+  const queries = React.useMemo(
+    () =>
+      clusterNames.map(clusterName => ({
+        queryKey: ['clusterVersion', clusterName],
+        queryFn: () => getVersion(clusterName),
+        refetchInterval: versionFetchInterval,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: 'always' as const,
+        retry: false, // surface errors immediately rather than hammering unreachable clusters
+      })),
+    [clusterNames]
+  );
 
-  React.useEffect(() => {
-    const newVersions: typeof versions = {};
-    const newErrors: typeof errors = {};
+  const results = useQueries({ queries });
 
-    function updateValues() {
-      if (cancelledRef.current) {
-        return;
+  return React.useMemo<
+    [{ [clusterName: string]: StringDict }, { [clusterName: string]: VersionInfo['error'] }]
+  >(() => {
+    const versionsInfo: { [clusterName: string]: StringDict } = {};
+    const errorsInfo: { [clusterName: string]: VersionInfo['error'] } = {};
+
+    clusterNames.forEach((clusterName, i) => {
+      const { data, error } = results[i];
+      if (data) {
+        versionsInfo[clusterName] = data;
       }
-
-      setVersions(currentVersions => {
-        const newVersionsToSet = { ...currentVersions };
-        Object.keys(newErrors).forEach(clusterName => {
-          if (!!newErrors[clusterName]) {
-            delete newVersionsToSet[clusterName];
-          }
-        });
-        return { ...newVersionsToSet, ...newVersions };
-      });
-      setErrors(currentErrors => {
-        const newErrorsToSet = { ...currentErrors };
-        Object.keys(newVersions).forEach(clusterName => {
-          newErrorsToSet[clusterName] = null;
-        });
-        return { ...newErrorsToSet, ...newErrors };
-      });
-    }
-
-    clusterNames.forEach(clusterName => {
-      getVersion(clusterName)
-        .then(version => {
-          newVersions[clusterName] = version;
-        })
-        .catch(err => {
-          newErrors[clusterName] = err;
-        })
-        .finally(() => {
-          updateValues();
-        });
+      // Only set the error key once the query has resolved. An absent key (undefined)
+      // signals "still loading" to getClusterStatus; null means the cluster is active.
+      if (!results[i].isPending) {
+        errorsInfo[clusterName] = (error as ApiError | null) ?? null;
+      }
     });
-  }, [clusterNames]);
 
-  React.useEffect(() => {
-    cancelledRef.current = false;
-    // Trigger periodically
-    const timeout = setInterval(() => {
-      if (cancelledRef.current) {
-        return;
-      }
-
-      if (Date.now() - lastUpdateRef.current > versionFetchInterval - 1) {
-        setClusterNames(clusterNames);
-      }
-    }, versionFetchInterval);
-
-    return function cleanup() {
-      cancelledRef.current = true;
-      clearInterval(timeout);
-    };
-  }, []);
-
-  return [versions, errors] as const;
+    return [versionsInfo, errorsInfo];
+  }, [clusterNames, results]);
 }
 
 // Other exports that can be used by plugins:
@@ -373,17 +262,26 @@ export * as clusterRoleBinding from './clusterRoleBinding';
 export * as configMap from './configMap';
 export * as crd from './crd';
 export * as cronJob from './cronJob';
+export * as controllerRevision from './controllerRevision';
 export * as daemonSet from './daemonSet';
 export * as deployment from './deployment';
+export * as deviceClass from './deviceClass';
 export * as event from './event';
 export * as ingress from './ingress';
 export * as ingressClass from './ingressClass';
 export * as job from './job';
+export * as jobSet from './jobSet';
+export * as leaderWorkerSet from './leaderWorkerSet';
 export * as namespace from './namespace';
 export * as node from './node';
 export * as persistentVolume from './persistentVolume';
 export * as persistentVolumeClaim from './persistentVolumeClaim';
 export * as pod from './pod';
+export * as compositePodGroup from './compositePodGroup';
+export * as podGroup from './podGroup';
+export * as resourceClaim from './resourceClaim';
+export * as resourceClaimTemplate from './resourceClaimTemplate';
+export * as schedulingWorkload from './schedulingWorkload';
 export * as replicaSet from './replicaSet';
 export * as role from './role';
 export * as roleBinding from './roleBinding';
@@ -392,3 +290,4 @@ export * as service from './service';
 export * as serviceAccount from './serviceAccount';
 export * as statefulSet from './statefulSet';
 export * as storageClass from './storageClass';
+export * as volumeAttributesClass from './volumeAttributesClass';

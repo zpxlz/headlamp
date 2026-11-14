@@ -1,10 +1,29 @@
-import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import i18next from 'i18next';
-import { OptionsObject as SnackbarProps } from 'notistack';
+import type { OptionsObject as SnackbarProps } from 'notistack';
 
 /**
  * See components/common/ActionsNotifier.tsx for a user of cluster actions.
  */
+
+type ActionState = 'start' | 'complete' | 'error';
 
 /**
  * A button to display on the action.
@@ -42,6 +61,10 @@ export interface ClusterAction {
    */
   url?: string;
   /**
+   * The state of the action. Helps identify if in progress, complete, or failed.
+   */
+  state?: ActionState;
+  /**
    * The buttons to display on the action.
    */
   buttons?: ClusterActionButton[];
@@ -60,6 +83,7 @@ export interface CallbackAction extends CallbackActionOptions {
 }
 
 export interface CallbackActionOptions {
+  callbackArgs?: any[];
   /**
    * The url to navigate to when the action has started.
    */
@@ -112,6 +136,26 @@ export interface CallbackActionOptions {
    * A callback to execute when the action is cancelled.
    */
   cancelCallback?: (...args: any[]) => void;
+  /**
+   * Synchronously formats the error message. Empty results or synchronous
+   * exceptions fall back to the default message; exceptions are logged.
+   */
+  errorMessageFormatter?: (error: Error) => string;
+  /**
+   * Called synchronously on success, not awaited. Synchronous exceptions are
+   * logged without changing the action outcome.
+   */
+  onSuccess?: () => void;
+  /**
+   * Called synchronously on failure, not awaited. Synchronous exceptions are
+   * logged without changing the action outcome.
+   */
+  onError?: (error: Error) => void;
+  /**
+   * Called synchronously on cancellation, not awaited. Synchronous exceptions
+   * are logged without changing the action outcome.
+   */
+  onCancelled?: () => void;
 }
 
 /**
@@ -127,6 +171,40 @@ const controllers = new Map<string, AbortController>();
 
 /** The amount of time to wait before allowing the action to be cancelled. */
 export const CLUSTER_ACTION_GRACE_PERIOD = 5000;
+
+// Splits the body of a K8s "is invalid: [...]" multi-error into one entry per
+// field error. A naive regex split on `, ` followed by `\w+:` falsely splits Go
+// struct value printouts that the API server embeds in `Invalid value:` (e.g.
+// `v1.LabelSelector{MatchLabels:..., MatchExpressions:...}`). To avoid that, we
+// track `{}` / `[]` depth and only split at top level, and only when the next
+// token starts with a lowercase field path — Go struct fields start uppercase,
+// so they cannot accidentally trigger a split.
+export function splitK8sValidationErrors(inner: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let start = 0;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '"' && inner[i - 1] !== '\\') {
+      inString = !inString;
+    } else if (!inString) {
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') depth = Math.max(0, depth - 1);
+      else if (
+        depth === 0 &&
+        ch === ',' &&
+        inner[i + 1] === ' ' &&
+        /^[a-z][\w./[\]-]*:/.test(inner.slice(i + 2))
+      ) {
+        parts.push(inner.slice(start, i));
+        start = i + 2;
+      }
+    }
+  }
+  parts.push(inner.slice(start));
+  return parts;
+}
 
 /**
  * Uses the callback to execute an action and dispatches actions
@@ -157,7 +235,12 @@ export const executeClusterAction = createAsyncThunk(
       errorMessage,
       errorUrl,
       successMessage,
+      callbackArgs,
       cancelCallback,
+      errorMessageFormatter,
+      onSuccess,
+      onError,
+      onCancelled,
       startOptions = {},
       cancelledOptions = {},
       successOptions = { variant: 'success' },
@@ -172,6 +255,7 @@ export const executeClusterAction = createAsyncThunk(
           id: actionKey,
           key: actionKey,
           message: startMessage,
+          state: 'start',
           url: startUrl,
           buttons: [
             {
@@ -190,6 +274,7 @@ export const executeClusterAction = createAsyncThunk(
           dismissSnackbar: actionKey,
           id: actionKey,
           message: successMessage,
+          state: 'complete',
           snackbarProps: successOptions,
           url: successUrl,
         })
@@ -201,6 +286,7 @@ export const executeClusterAction = createAsyncThunk(
           buttons: undefined,
           id: actionKey,
           message: cancelledMessage,
+          state: 'complete',
           dismissSnackbar: actionKey,
           url: cancelUrl,
           snackbarProps: cancelledOptions,
@@ -208,13 +294,51 @@ export const executeClusterAction = createAsyncThunk(
         })
       );
     }
-    function dispatchError() {
+    function dispatchError(err?: Error | string | null) {
+      let message = errorMessage || '';
+      if (err) {
+        const rawMessage = typeof err === 'string' ? err : err.message;
+        const originalMessage = rawMessage
+          ? (() => {
+              const cleaned = rawMessage.replace(/,?\s*regex used for validation is '[^']*'/g, '');
+              // K8s multi-error format: "... is invalid: [field1: msg1, field2: msg2]"
+              const match = cleaned.match(/^(.*?is invalid:)\s*\[(.+)\]\s*$/s);
+              if (match) {
+                const prefix = match[1];
+                const inner = match[2];
+                const bullets = splitK8sValidationErrors(inner)
+                  .map(s => `• ${s.trim()}`)
+                  .join('\n');
+                return `${prefix}\n${bullets}`.trim();
+              }
+              return cleaned.trim();
+            })()
+          : rawMessage;
+        if (originalMessage) {
+          const separator = message ? (message.endsWith('.') ? ' ' : '. ') : '';
+          message = `${message}${separator}${originalMessage}`;
+        }
+      }
+
+      if (errorMessageFormatter && err instanceof Error) {
+        try {
+          const formatted = errorMessageFormatter(err);
+          // Only use the formatter result if it is a non-empty string.
+          if (formatted) {
+            message = formatted;
+          }
+        } catch (formatterErr) {
+          // Formatter threw – fall back to the combined default message.
+          console.error('errorMessageFormatter threw an error:', formatterErr);
+        }
+      }
       dispatch(
         updateClusterAction({
           buttons: undefined,
           dismissSnackbar: actionKey,
           id: actionKey,
-          message: errorMessage,
+          message,
+          state: 'error',
           snackbarProps: errorOptions,
           url: errorUrl,
         })
@@ -242,10 +366,22 @@ export const executeClusterAction = createAsyncThunk(
         if (controller.signal.aborted) {
           return rejectWithValue('Action cancelled');
         }
-        callback();
+        if (callbackArgs === undefined) {
+          await Promise.resolve(callback());
+        } else {
+          await Promise.resolve(callback(...callbackArgs));
+        }
         dispatchSuccess();
+        if (onSuccess) {
+          try {
+            onSuccess();
+          } catch (callbackErr) {
+            console.error('onSuccess callback threw an error:', callbackErr);
+          }
+        }
       } catch (err) {
-        if ((err as Error).message === 'Action cancelled' || controller.signal.aborted) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (error.message === 'Action cancelled' || controller.signal.aborted) {
           dispatchCancelled();
 
           if (cancelCallback) {
@@ -255,8 +391,22 @@ export const executeClusterAction = createAsyncThunk(
               console.error(err);
             }
           }
+          if (onCancelled) {
+            try {
+              onCancelled();
+            } catch (err) {
+              console.error(err);
+            }
+          }
         } else {
-          dispatchError();
+          dispatchError(error);
+          if (onError) {
+            try {
+              onError(error);
+            } catch (callbackErr) {
+              console.error('onError callback threw an error:', callbackErr);
+            }
+          }
         }
       } finally {
         controllers.delete(actionKey);

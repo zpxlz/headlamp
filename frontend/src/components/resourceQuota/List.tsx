@@ -1,10 +1,30 @@
-import { Box, Chip } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
 import { styled } from '@mui/system';
+import { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ApiError } from '../../lib/k8s/apiProxy';
+import { ApiError } from '../../lib/k8s/api/v2/ApiError';
 import ResourceQuota from '../../lib/k8s/resourceQuota';
-import { SimpleTableProps } from '../common';
+import { useNamespaces } from '../../redux/filterSlice';
+import { CreateResourceButton } from '../common/CreateResourceButton';
 import ResourceListView from '../common/Resource/ResourceListView';
+import { SimpleTableProps } from '../common/SimpleTable';
 
 const WrappingBox = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -22,19 +42,19 @@ const PaddedChip = styled(Chip)({
 
 export interface ResourceQuotaProps {
   resourceQuotas: ResourceQuota[] | null;
-  error: ApiError | null;
+  errors: ApiError[] | null;
   hideColumns?: string[];
   reflectTableInURL?: SimpleTableProps['reflectInURL'];
-  noSearch?: boolean;
+  noNamespaceFilter?: boolean;
 }
 
 export function ResourceQuotaRenderer(props: ResourceQuotaProps) {
   const {
     resourceQuotas,
-    error,
+    errors,
     hideColumns = [],
     reflectTableInURL = 'resourcequotas',
-    noSearch,
+    noNamespaceFilter,
   } = props;
   const { t } = useTranslation(['glossary', 'translation']);
 
@@ -45,40 +65,39 @@ export function ResourceQuotaRenderer(props: ResourceQuotaProps) {
       columns={[
         'name',
         'namespace',
+        'cluster',
         {
           id: 'requests',
           label: t('translation|Request'),
-          getter: (item: ResourceQuota) => {
-            const requests: JSX.Element[] = [];
+          getValue: item => item.requests.join(', '),
+          render: item => {
+            const requests: ReactNode[] = [];
             item.requests.forEach((request: string) => {
               requests.push(<PaddedChip label={request} variant="outlined" size="small" />);
             });
             return <WrappingBox>{requests}</WrappingBox>;
           },
-          cellProps: {
-            style: {
-              width: 'fit-content',
-              minWidth: '100%',
-            },
-          },
         },
         {
           id: 'limits',
           label: t('translation|Limit'),
-          getter: (item: ResourceQuota) => {
-            const limits: JSX.Element[] = [];
+          getValue: item => item?.limits?.join(', '),
+          render: item => {
+            const limits: ReactNode[] = [];
             item.limits.forEach((limit: string) => {
               limits.push(<PaddedChip label={limit} variant="outlined" size="small" />);
             });
             return <WrappingBox>{limits}</WrappingBox>;
           },
         },
+        'labels',
         'age',
       ]}
       headerProps={{
-        noSearch,
+        noNamespaceFilter,
+        titleSideActions: [<CreateResourceButton resourceClass={ResourceQuota} />],
       }}
-      errorMessage={ResourceQuota.getErrorMessage(error)}
+      errors={errors}
       data={resourceQuotas}
       reflectInURL={reflectTableInURL}
       id="headlamp-resourcequotas"
@@ -87,7 +106,9 @@ export function ResourceQuotaRenderer(props: ResourceQuotaProps) {
 }
 
 export default function ResourceQuotaList() {
-  const [resourceQuotas, error] = ResourceQuota.useList();
+  const { items: resourceQuotas, errors } = ResourceQuota.useList({ namespace: useNamespaces() });
 
-  return <ResourceQuotaRenderer resourceQuotas={resourceQuotas} error={error} reflectTableInURL />;
+  return (
+    <ResourceQuotaRenderer resourceQuotas={resourceQuotas} errors={errors} reflectTableInURL />
+  );
 }

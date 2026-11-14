@@ -1,76 +1,39 @@
-import { Grid, GridProps } from '@mui/material';
-import makeStyles from '@mui/styles/makeStyles';
-import clsx from 'clsx';
-import React from 'react';
-import { ValueLabel } from '../Label';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-const useStyles = makeStyles(theme => ({
-  metadataNameCell: {
-    fontSize: '1rem',
-    textAlign: 'left',
-    maxWidth: '100%',
-    minWidth: '10rem',
-    verticalAlign: 'top',
-    color: theme.palette.text.secondary,
-    borderBottom: `1px solid ${theme.palette.divider}`,
-    padding: '7px 12px',
-    [theme.breakpoints.down('sm')]: {
-      color: theme.palette.text.primary,
-      fontSize: '1.5rem',
-      minWidth: '100%',
-      width: '100%',
-      maxWidth: '100%',
-      display: 'block',
-      borderTop: `1px solid ${theme.palette.divider}`,
-      borderBottom: `none`,
-    },
-  },
-  metadataCell: {
-    width: '100%',
-    verticalAlign: 'top',
-    fontSize: '1rem',
-    overflowWrap: 'anywhere',
-    padding: '7px 12px',
-    borderBottom: `1px solid ${theme.palette.divider}`,
-    [theme.breakpoints.down('sm')]: {
-      color: theme.palette.text.secondary,
-      minWidth: '100%',
-      width: '100%',
-      maxWidth: '100%',
-      display: 'block',
-      marginBottom: '2rem',
-      borderBottom: `none`,
-    },
-  },
-  metadataRow: {
-    borderBottom: `1px solid ${theme.palette.divider}`,
-  },
-  metadataLast: {
-    borderBottom: 'none',
-  },
-  table: {
-    border: '1px solid #e7e7e7',
-    borderRadius: theme.shape.borderRadius,
-  },
-  highlightRow: {
-    color: theme.palette.tables.head.color,
-    fontWeight: 'bold',
-    background: theme.palette.tables.head.background,
-  },
-}));
+import { GridProps } from '@mui/material/Grid';
+import Grid from '@mui/material/Grid';
+import React, { ReactNode } from 'react';
+import { ValueLabel } from '../Label';
 
 export interface NameValueTableRow {
   /** The name (key) for this row */
-  name: string | JSX.Element;
+  name: ReactNode;
   /** The value for this row */
-  value?: string | JSX.Element | JSX.Element[];
+  value?: ReactNode;
   /** Whether this row should be hidden (can be a boolean or a function that will take the
    * @param value and return a boolean) */
   hide?: boolean | ((value: NameValueTableRow['value']) => boolean);
   /** Extra properties to pass to the value cell */
   valueCellProps?: GridProps;
+  valueFullRow?: boolean;
   /** Whether to highlight the row (used for titles, separators, etc.). */
   withHighlightStyle?: boolean;
+  /** The ID to use for the name element, useful for accessibility */
+  nameID?: string;
 }
 
 export interface NameValueTableProps {
@@ -78,11 +41,7 @@ export interface NameValueTableProps {
   valueCellProps?: GridProps;
 }
 
-function Value({
-  value,
-}: {
-  value: string | JSX.Element | JSX.Element[] | undefined;
-}): JSX.Element | null {
+function Value({ value }: { value: ReactNode }): ReactNode {
   if (typeof value === 'undefined') {
     return null;
   } else if (typeof value === 'string') {
@@ -101,7 +60,6 @@ function Value({
 }
 
 export default function NameValueTable(props: NameValueTableProps) {
-  const classes = useStyles();
   const { rows, valueCellProps: globalValueCellProps } = props;
 
   const visibleRows = React.useMemo(
@@ -123,10 +81,26 @@ export default function NameValueTable(props: NameValueTableProps) {
     <Grid
       container
       component="dl" // mount a Definition List
-      className={classes.table}
+      sx={theme => ({
+        border: '1px solid',
+        borderColor: theme.palette.tables.head.borderColor,
+        borderRadius: theme.shape.borderRadius + 'px',
+        overflow: 'hidden',
+      })}
     >
       {visibleRows.flatMap(
-        ({ name, value, hide = false, withHighlightStyle = false, valueCellProps = {} }, i) => {
+        (
+          {
+            name,
+            nameID,
+            value,
+            hide = false,
+            withHighlightStyle = false,
+            valueFullRow = false,
+            valueCellProps = {},
+          },
+          i
+        ) => {
           let shouldHide = false;
           if (typeof hide === 'function') {
             shouldHide = hide(value);
@@ -148,13 +122,43 @@ export default function NameValueTable(props: NameValueTableProps) {
               item
               key={i}
               xs={12}
-              sm={hideValueGridItem ? 12 : 4}
+              sm={hideValueGridItem ? 12 : 3}
+              md={hideValueGridItem ? 12 : 2}
               component="dt"
-              className={clsx(
-                last ? classes.metadataLast : '',
-                classes.metadataNameCell,
-                withHighlightStyle ? classes.highlightRow : ''
-              )}
+              className={className}
+              id={nameID}
+              sx={theme => {
+                const extra = withHighlightStyle
+                  ? {
+                      color: theme.palette.text.primary,
+                      fontWeight: 'bold',
+                      background: theme.palette.background.muted,
+                    }
+                  : {};
+                return {
+                  fontSize: '1rem',
+                  textAlign: 'left',
+                  maxWidth: '100%',
+                  minWidth: 0,
+                  wordBreak: 'break-word',
+                  verticalAlign: 'top',
+                  color: theme.palette.text.secondary,
+                  borderBottom:
+                    last || valueFullRow ? 'none' : `1px solid ${theme.palette.divider}`,
+                  padding: '7px 12px',
+                  [theme.breakpoints.down('sm')]: {
+                    color: theme.palette.text.primary,
+                    fontSize: '1.5rem',
+                    minWidth: '100%',
+                    width: '100%',
+                    maxWidth: '100%',
+                    display: 'block',
+                    borderTop: `1px solid ${theme.palette.divider}`,
+                    borderBottom: `none`,
+                  },
+                  ...extra,
+                };
+              }}
             >
               {name}
             </Grid>,
@@ -165,14 +169,36 @@ export default function NameValueTable(props: NameValueTableProps) {
                 item
                 key={i + 10000}
                 xs={12}
-                sm={8}
+                sm={valueFullRow ? 12 : 9}
+                md={valueFullRow ? 12 : 10}
                 component="dd"
-                className={clsx(
-                  last ? classes.metadataLast : '',
-                  classes.metadataCell,
-                  className ? className : '',
-                  withHighlightStyle ? classes.highlightRow : ''
-                )}
+                sx={theme => {
+                  const extra = withHighlightStyle
+                    ? {
+                        color: theme.palette.text.primary,
+                        fontWeight: 'bold',
+                        background: theme.palette.background.muted,
+                      }
+                    : {};
+                  return {
+                    width: '100%',
+                    verticalAlign: 'top',
+                    fontSize: '1rem',
+                    overflowWrap: 'anywhere',
+                    padding: '7px 12px',
+                    borderBottom: last ? 'none' : `1px solid ${theme.palette.divider}`,
+                    [theme.breakpoints.down('sm')]: {
+                      color: theme.palette.text.secondary,
+                      minWidth: '100%',
+                      width: '100%',
+                      maxWidth: '100%',
+                      display: 'block',
+                      marginBottom: '2rem',
+                      borderBottom: `none`,
+                    },
+                    ...extra,
+                  };
+                }}
                 {...otherValueCellProps}
                 {...valueCellProps}
               >

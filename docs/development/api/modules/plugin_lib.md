@@ -1,8 +1,6 @@
----
-title: "Module: plugin/lib"
-linkTitle: "plugin/lib"
-slug: "plugin_lib"
----
+[API](../API.md) / plugin/lib
+
+# Module: plugin/lib
 
 ## Classes
 
@@ -12,3 +10,4 @@ slug: "plugin_lib"
 ## Interfaces
 
 - [AppMenu](../interfaces/plugin_lib.AppMenu.md)
+- [DesktopApi](../interfaces/plugin_lib.DesktopApi.md)

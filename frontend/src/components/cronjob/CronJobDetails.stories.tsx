@@ -1,47 +1,64 @@
-import { Meta, Story } from '@storybook/react';
-import { KubeObjectClass } from '../../lib/k8s/cluster';
-import CronJob from '../../lib/k8s/cronJob';
-import Job from '../../lib/k8s/job';
-import { TestContext } from '../../test';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import CronJobDetails from './Details';
 import { cronJobList } from './storyHelper';
-
-CronJob.getAuthorization = (): Promise<{ status: any }> => {
-  return new Promise(resolve => {
-    resolve({ status: { allowed: true, reason: '', code: 200 } });
-  });
-};
-
-Job.getAuthorization = CronJob.getAuthorization;
-
-const usePhonyGet: KubeObjectClass['useGet'] = (name, namespace) => {
-  const cronJobJson = cronJobList.find(
-    cronJob => cronJob.metadata.name === name && cronJob.metadata.namespace === namespace
-  );
-  return [new CronJob(cronJobJson!), null, () => {}, () => {}] as any;
-};
 
 export default {
   title: 'CronJob/CronJobDetailsView',
   component: CronJobDetails,
   argTypes: {},
+  parameters: {
+    msw: {
+      handlers: {
+        storyBase: [
+          http.get(`${API_BASE}/apis/batch/v1/namespaces/default/cronjobs`, () =>
+            HttpResponse.error()
+          ),
+          http.get(`${API_BASE}/api/v1/namespaces/default/events`, () =>
+            HttpResponse.json({
+              kind: 'EventList',
+              items: [],
+              metadata: {},
+            })
+          ),
+          http.get(`${API_BASE}/apis/batch/v1/namespaces/default/jobs`, () =>
+            HttpResponse.json({
+              kind: 'JobsList',
+              metadata: {},
+              items: [],
+            })
+          ),
+          http.get(`${API_BASE}/apis/batch/v1beta1/cronjobs`, () => HttpResponse.error()),
+          http.get(`${API_BASE}/apis/batch/v1/jobs`, () => HttpResponse.error()),
+        ],
+      },
+    },
+  },
 } as Meta;
 
 interface MockerStory {
-  useGet?: KubeObjectClass['useGet'];
-  useList?: KubeObjectClass['useList'];
   cronJobName: string;
 }
 
-const Template: Story<MockerStory> = args => {
-  const { useGet, useList, cronJobName } = args;
-
-  if (!!useGet) {
-    CronJob.useGet = args.useGet!;
-  }
-  if (!!useList) {
-    CronJob.useList = args.useList!;
-  }
+const Template: StoryFn<MockerStory> = args => {
+  const { cronJobName } = args;
 
   return (
     <TestContext routerMap={{ namespace: 'default', name: cronJobName }}>
@@ -52,12 +69,34 @@ const Template: Story<MockerStory> = args => {
 
 export const EveryMinute = Template.bind({});
 EveryMinute.args = {
-  useGet: usePhonyGet,
   cronJobName: 'every-minute',
+};
+EveryMinute.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(`${API_BASE}/apis/batch/v1/namespaces/default/cronjobs/every-minute`, () =>
+          HttpResponse.json(cronJobList.find(it => it.metadata.name === 'every-minute'))
+        ),
+      ],
+    },
+  },
 };
 
 export const EveryAst = Template.bind({});
 EveryAst.args = {
-  useGet: usePhonyGet,
   cronJobName: 'every-minute-one-char',
+};
+EveryAst.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(
+          `${API_BASE}/apis/batch/v1/namespaces/default/cronjobs/every-minute-one-char`,
+          () =>
+            HttpResponse.json(cronJobList.find(it => it.metadata.name === 'every-minute-one-char'))
+        ),
+      ],
+    },
+  },
 };

@@ -1,19 +1,35 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import Grid from '@mui/material/Grid';
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation } from 'react-router-dom';
-import { useCluster } from '../../lib/k8s';
-import { ApiError } from '../../lib/k8s/apiProxy';
-import { KubeObject, Workload } from '../../lib/k8s/cluster';
 import CronJob from '../../lib/k8s/cronJob';
 import DaemonSet from '../../lib/k8s/daemonSet';
 import Deployment from '../../lib/k8s/deployment';
 import Job from '../../lib/k8s/job';
+import JobSet from '../../lib/k8s/jobSet';
+import LeaderWorkerSet from '../../lib/k8s/leaderWorkerSet';
 import Pod from '../../lib/k8s/pod';
 import ReplicaSet from '../../lib/k8s/replicaSet';
 import StatefulSet from '../../lib/k8s/statefulSet';
-import { getReadyReplicas, getTotalReplicas, useFilterFunc } from '../../lib/util';
-import { PageGrid, ResourceLink } from '../common/Resource';
+import type { Workload, WorkloadClass } from '../../lib/k8s/Workload';
+import { getReadyReplicas, getTotalReplicas } from '../../lib/util';
+import Link from '../common/Link';
+import { PageGrid } from '../common/Resource';
 import ResourceListView from '../common/Resource/ResourceListView';
 import { SectionBox } from '../common/SectionBox';
 import { WorkloadCircleChart } from './Charts';
@@ -23,22 +39,42 @@ interface WorkloadDict {
 }
 
 export default function Overview() {
-  const [workloadsData, setWorkloadsData] = React.useState<WorkloadDict>({});
-  const location = useLocation();
-  const filterFunc = useFilterFunc(['.jsonData.kind']);
+  const [pods] = Pod.useList();
+  const [deployments] = Deployment.useList();
+  const [statefulSets] = StatefulSet.useList();
+  const [daemonSets] = DaemonSet.useList();
+  const [replicaSets] = ReplicaSet.useList();
+  const [jobs] = Job.useList();
+  const [cronJobs] = CronJob.useList();
+  const [jobSets] = JobSet.useList();
+  const [leaderWorkerSets] = LeaderWorkerSet.useList();
+
+  const workloadsData: WorkloadDict = useMemo(
+    () => ({
+      Pod: pods ?? [],
+      Deployment: deployments ?? [],
+      StatefulSet: statefulSets ?? [],
+      DaemonSet: daemonSets ?? [],
+      ReplicaSet: replicaSets ?? [],
+      Job: jobs ?? [],
+      CronJob: cronJobs ?? [],
+      JobSet: jobSets ?? [],
+      LeaderWorkerSet: leaderWorkerSets ?? [],
+    }),
+    [
+      pods,
+      deployments,
+      statefulSets,
+      daemonSets,
+      replicaSets,
+      jobs,
+      cronJobs,
+      jobSets,
+      leaderWorkerSets,
+    ]
+  );
+
   const { t } = useTranslation('glossary');
-  const cluster = useCluster();
-
-  React.useEffect(() => {
-    setWorkloadsData({});
-  }, [cluster]);
-
-  function setWorkloads(newWorkloads: WorkloadDict) {
-    setWorkloadsData(workloads => ({
-      ...workloads,
-      ...newWorkloads,
-    }));
-  }
 
   function getPods(item: Workload) {
     return `${getReadyReplicas(item)}/${getTotalReplicas(item)}`;
@@ -53,14 +89,9 @@ export default function Overview() {
     return totalReplicasDiff;
   }
 
-  // Get all items except the pods since those shouldn't be shown in the table (only the chart).
-  function getJointItems() {
+  // All items except the pods since those shouldn't be shown in the table (only the chart).
+  const jointItems = React.useMemo(() => {
     let joint: Workload[] = [];
-
-    // Return null if no items are yet loaded, so we show the spinner in the table.
-    if (Object.keys(workloadsData).length === 0) {
-      return null;
-    }
 
     // Get all items except the pods since those shouldn't be shown in the table (only the chart).
     for (const [key, items] of Object.entries(workloadsData)) {
@@ -69,10 +100,18 @@ export default function Overview() {
       }
       joint = joint.concat(items);
     }
-    return joint;
-  }
 
-  const workloads: KubeObject[] = [
+    joint = joint.filter(Boolean);
+
+    // Return null if no items are yet loaded, so we show the spinner in the table.
+    if (joint.some(it => it === undefined)) {
+      return null;
+    }
+
+    return joint;
+  }, [workloadsData]);
+
+  const workloads: WorkloadClass[] = [
     Pod,
     Deployment,
     StatefulSet,
@@ -80,32 +119,61 @@ export default function Overview() {
     ReplicaSet,
     Job,
     CronJob,
+    JobSet,
+    LeaderWorkerSet,
   ];
 
-  workloads.forEach((workloadClass: KubeObject) => {
-    workloadClass.useApiList(
-      (items: InstanceType<typeof workloadClass>[]) => {
-        setWorkloads({ [workloadClass.className]: items });
-      },
-      (err: ApiError) => {
-        console.error(`Workloads list: Failed to get list for ${workloadClass.className}: ${err}`);
-        setWorkloads({ [workloadClass.className]: [] });
-      }
-    );
-  });
+  const workloadLabel = {
+    [Pod.className]: t('glossary|Pods'),
+    [Deployment.className]: t('glossary|Deployments'),
+    [StatefulSet.className]: t('glossary|Stateful Sets'),
+    [DaemonSet.className]: t('glossary|Daemon Sets'),
+    [ReplicaSet.className]: t('glossary|Replica Sets'),
+    [Job.className]: t('glossary|Jobs'),
+    [CronJob.className]: t('glossary|Cron Jobs'),
+    [JobSet.className]: t('glossary|Job Sets'),
+    [LeaderWorkerSet.className]: t('glossary|Leader Worker Sets'),
+  };
+
+  function ChartLink({ workload }: { workload: WorkloadClass }) {
+    return <Link routeName={workload.pluralName}>{workloadLabel[workload.className]}</Link>;
+  }
+
+  // Workloads that classify health per item instead of by replica match.
+  // Jobs/CronJobs/JobSets have no replica fields (like Pods). Leader worker sets
+  // do have them, but a plain ready/desired comparison can't tell a partially
+  // ready group apart from a failed one, nor spot a rollout in progress.
+  const perItemHealth: Record<
+    string,
+    ((item: Workload) => ReturnType<Job['getHealth']>) | undefined
+  > = {
+    [Job.className]: item => (item as Job).getHealth(),
+    [CronJob.className]: item => (item as CronJob).getHealth(),
+    [JobSet.className]: item => (item as JobSet).getHealth(),
+    [LeaderWorkerSet.className]: item => (item as LeaderWorkerSet).getHealth(),
+  };
 
   return (
     <PageGrid>
       <SectionBox py={2} mt={1}>
         <Grid container justifyContent="flex-start" alignItems="flex-start" spacing={2}>
-          {workloads.map(({ className: name }) => (
-            <Grid item lg={3} md={4} xs={6} key={name}>
+          {workloads.map(workload => (
+            <Grid item lg={3} md={4} xs={6} key={workload.className} style={{ minWidth: 0 }}>
               <WorkloadCircleChart
-                workloadData={workloadsData[name] || null}
-                // @todo: Use a plural from from the class itself when we have it
-                title={name + 's'}
+                workloadData={workloadsData[workload.className] || null}
+                title={<ChartLink workload={workload} />}
+                loaderTitle={workloadLabel[workload.className]}
                 partialLabel={t('translation|Failed')}
-                totalLabel={t('translation|Running')}
+                totalLabel={
+                  workload === Pod || perItemHealth[workload.className]
+                    ? t('translation|Healthy')
+                    : t('translation|Running')
+                }
+                categorize={
+                  workload === Pod
+                    ? item => (item as Pod).getHealth()
+                    : perItemHealth[workload.className]
+                }
               />
             </Grid>
           ))}
@@ -113,32 +181,28 @@ export default function Overview() {
       </SectionBox>
       <ResourceListView
         title={t('Workloads')}
-        filterFunction={filterFunc}
+        reflectInURL
         columns={[
           'kind',
           {
             id: 'name',
             label: t('translation|Name'),
-            getter: item => <ResourceLink resource={item} state={{ backLink: { ...location } }} />,
-            sort: (w1: Workload, w2: Workload) => {
-              if (w1.metadata.name < w2.metadata.name) {
-                return -1;
-              } else if (w1.metadata.name > w2.metadata.name) {
-                return 1;
-              }
-              return 0;
-            },
+            gridTemplate: 'auto',
+            getValue: item => item.metadata.name,
+            render: item => <Link kubeObject={item} />,
           },
           'namespace',
+          'cluster',
           {
             id: 'pods',
             label: t('Pods'),
-            getter: item => item && getPods(item),
+            gridTemplate: 'min-content',
+            getValue: item => item && getPods(item),
             sort: sortByReplicas,
           },
           'age',
         ]}
-        data={getJointItems()}
+        data={jointItems}
         headerProps={{
           noNamespaceFilter: false,
         }}

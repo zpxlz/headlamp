@@ -1,5 +1,23 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
-import { Box, Button, Snackbar } from '@mui/material';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Snackbar from '@mui/material/Snackbar';
 import { styled } from '@mui/system';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,15 +29,26 @@ const ColoredSnackbar = styled(Snackbar)({
   },
 });
 
-function UpdatePopup(props: {
+export interface UpdatePopupProps {
+  /** URL for the release */
   releaseDownloadURL?: string | null;
+  /** Whether the release is being fetched */
   fetchingRelease?: boolean;
+  /** If release fetch failed */
   releaseFetchFailed?: boolean;
+  /** if the user wants to skip a release */
   skipUpdateHandler: () => void;
-}) {
+}
+
+function UpdatePopup({
+  releaseDownloadURL,
+  fetchingRelease,
+  releaseFetchFailed,
+  skipUpdateHandler,
+}: UpdatePopupProps) {
   const [show, setShow] = React.useState(true);
-  const { releaseDownloadURL, fetchingRelease, releaseFetchFailed, skipUpdateHandler } = props;
   const { t } = useTranslation();
+  const [closeSnackError, setCloseSnackError] = React.useState(false);
 
   if (fetchingRelease && !releaseDownloadURL) {
     return (
@@ -65,59 +94,10 @@ function UpdatePopup(props: {
           vertical: 'bottom',
           horizontal: 'right',
         }}
-        open={releaseFetchFailed}
-        message={t('translation|Failed to fetch release information')}
-        ContentProps={{
-          'aria-describedby': 'updatePopup',
+        open={releaseFetchFailed && !closeSnackError}
+        onClose={() => {
+          setCloseSnackError(true);
         }}
-        autoHideDuration={6000}
-      />
-    );
-  }
-
-  if (!releaseDownloadURL) {
-    return null;
-  }
-
-  if (fetchingRelease && !releaseDownloadURL) {
-    return (
-      <ColoredSnackbar
-        anchorOrigin={{
-          vertical: 'bottom',
-          horizontal: 'right',
-        }}
-        autoHideDuration={5000}
-        message={t('translation|Fetching release information…')}
-        ContentProps={{
-          'aria-describedby': 'updatePopup',
-        }}
-        open={fetchingRelease}
-        action={
-          <React.Fragment>
-            <Button
-              style={{
-                color: 'rgb(255, 242, 0)',
-              }}
-              onClick={() => {
-                skipUpdateHandler();
-              }}
-            >
-              {t('translation|Skip')}
-            </Button>
-          </React.Fragment>
-        }
-      />
-    );
-  }
-
-  if (releaseFetchFailed && !releaseDownloadURL) {
-    return (
-      <ColoredSnackbar
-        anchorOrigin={{
-          vertical: 'bottom',
-          horizontal: 'right',
-        }}
-        open={releaseFetchFailed}
         message={t('translation|Failed to fetch release information')}
         ContentProps={{
           'aria-describedby': 'updatePopup',
@@ -148,7 +128,7 @@ function UpdatePopup(props: {
           <Box display={'flex'} alignItems="center">
             <Box ml={-1}>
               <Button
-                onClick={() => window.open(releaseDownloadURL)}
+                onClick={() => window.open(releaseDownloadURL, '_blank', 'noopener,noreferrer')}
                 style={{
                   color: 'inherit',
                   textTransform: 'none',
@@ -166,6 +146,7 @@ function UpdatePopup(props: {
                   localStorage.setItem('disable_update_check', 'true');
                   setShow(false);
                 }}
+                aria-label={t('translation|Disable update notifications')}
               >
                 <Icon icon={'mdi:bell-off-outline'} width="20" />
               </Button>
@@ -186,9 +167,5 @@ function UpdatePopup(props: {
     />
   );
 }
-
-UpdatePopup.defaultProps = {
-  open: true,
-};
 
 export default UpdatePopup;

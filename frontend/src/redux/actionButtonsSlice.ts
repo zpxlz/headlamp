@@ -1,24 +1,39 @@
-import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { get, set } from 'lodash';
-import { ReactElement, ReactNode } from 'react';
-import { KubeObject } from '../lib/k8s/cluster';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-export type HeaderActionType =
-  | ((...args: any[]) => JSX.Element | null | ReactNode)
-  | null
-  | ReactElement
-  | ReactNode;
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createSlice } from '@reduxjs/toolkit';
+import { get, set } from 'lodash';
+import type { ReactElement, ReactNode } from 'react';
+import type { KubeObject } from '../lib/k8s/KubeObject';
+
+export type HeaderActionType = ((...args: any[]) => ReactNode) | null | ReactElement | ReactNode;
 export type DetailsViewFunc = HeaderActionType;
 
-export type AppBarActionType =
-  | ((...args: any[]) => JSX.Element | null | ReactNode)
-  | null
-  | ReactElement
-  | ReactNode;
+export type AppBarActionType = ((...args: any[]) => ReactNode) | null | ReactElement | ReactNode;
+export type RowActionType = ((item: any) => JSX.Element | null | ReactNode) | null;
 
 export type HeaderAction = {
   id: string;
   action?: HeaderActionType;
+};
+
+export type RowAction = {
+  id: string;
+  action?: RowActionType;
 };
 
 export type AppBarAction = {
@@ -30,12 +45,16 @@ export enum DefaultHeaderAction {
   RESTART = 'RESTART',
   DELETE = 'DELETE',
   EDIT = 'EDIT',
+  VIEW = 'VIEW',
   SCALE = 'SCALE',
+  DOWNLOAD = 'DOWNLOAD',
   POD_LOGS = 'POD_LOGS',
   POD_TERMINAL = 'POD_TERMINAL',
+  POD_DEBUG = 'POD_DEBUG',
   POD_ATTACH = 'POD_ATTACH',
   NODE_TOGGLE_CORDON = 'NODE_TOGGLE_CORDON',
   NODE_DRAIN = 'NODE_DRAIN',
+  NODE_SHELL = 'NODE_SHELL',
 }
 
 export enum DefaultAppBarAction {
@@ -43,6 +62,7 @@ export enum DefaultAppBarAction {
   NOTIFICATION = 'NOTIFICATION',
   SETTINGS = 'SETTINGS',
   USER = 'USER',
+  GLOBAL_SEARCH = 'GLOBAL_SEARCH',
 }
 
 type HeaderActionFuncType = (
@@ -114,7 +134,7 @@ export const actionButtonsSlice = createSlice({
 
       if (headerAction.id === undefined) {
         if (headerAction.action === undefined) {
-          headerAction = { id: '', action: headerAction };
+          headerAction = { id: '', action: headerAction as unknown as HeaderActionType };
         } else {
           headerAction = { id: '', action: headerAction.action };
         }

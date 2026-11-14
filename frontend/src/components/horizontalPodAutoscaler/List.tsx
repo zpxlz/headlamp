@@ -1,8 +1,25 @@
-import { Chip } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Chip from '@mui/material/Chip';
 import { styled } from '@mui/system';
+import { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import HPA from '../../lib/k8s/hpa';
-import { Link } from '../common';
+import Link from '../common/Link';
 import ResourceListView from '../common/Resource/ResourceListView';
 
 const RootDiv = styled('div')(({ theme }) => ({
@@ -29,10 +46,12 @@ export default function HpaList() {
       columns={[
         'name',
         'namespace',
+        'cluster',
         {
           id: 'reference',
           label: t('translation|Reference'),
-          getter: item => (
+          getValue: item => item.referenceObject?.metadata.name,
+          render: item => (
             <Link kubeObject={item.referenceObject}>
               {item.referenceObject?.kind}/{item.referenceObject?.metadata.name}
             </Link>
@@ -41,8 +60,13 @@ export default function HpaList() {
         {
           id: 'targets',
           label: t('translation|Targets'),
-          getter: (hpa: HPA) => {
-            const value: JSX.Element[] = [];
+          getValue: item =>
+            item
+              .metrics(t)
+              .map(it => it.shortValue)
+              .join(', '),
+          render: (hpa: HPA) => {
+            const value: ReactNode[] = [];
             const metrics = hpa.metrics(t);
             if (metrics.length) {
               value.push(
@@ -61,31 +85,26 @@ export default function HpaList() {
             }
             return <RootDiv>{value}</RootDiv>;
           },
-          cellProps: {
-            style: {
-              width: 'fit-content',
-              minWidth: '100%',
-            },
-          },
         },
         {
           id: 'minReplicas',
           label: t('translation|MinReplicas'),
-          getter: item => item.spec.minReplicas,
-          sort: true,
+          gridTemplate: 'min-content',
+          getValue: item => item.spec.minReplicas,
         },
         {
           id: 'maxReplicas',
           label: t('translation|MaxReplicas'),
-          getter: item => item.spec.maxReplicas,
-          sort: true,
+          gridTemplate: 'min-content',
+          getValue: item => item.spec.maxReplicas,
         },
         {
           id: 'currentReplicas',
           label: t('glossary|Replicas'),
-          getter: item => item.status.currentReplicas,
-          sort: true,
+          gridTemplate: 'min-content',
+          getValue: item => item.status.currentReplicas,
         },
+        'labels',
         'age',
       ]}
     />

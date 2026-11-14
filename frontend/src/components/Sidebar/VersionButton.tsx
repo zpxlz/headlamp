@@ -1,18 +1,34 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import { styled, useTheme } from '@mui/system';
+import { useQuery } from '@tanstack/react-query';
 import { useSnackbar } from 'notistack';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import semver from 'semver';
 import { getVersion, useCluster } from '../../lib/k8s';
 import { StringDict } from '../../lib/k8s/cluster';
-import { useTypedSelector } from '../../redux/reducers/reducers';
+import { useTypedSelector } from '../../redux/hooks';
+import { Dialog } from '../common/Dialog';
 import { NameValueTable } from '../common/SimpleTable';
 
 const versionSnackbarHideTimeout = 5000; // ms
@@ -27,7 +43,6 @@ const VersionIcon = styled(Icon)({
 export default function VersionButton() {
   const isSidebarOpen = useTypedSelector(state => state.sidebar.isSidebarOpen);
   const { enqueueSnackbar } = useSnackbar();
-  const [clusterVersion, setClusterVersion] = React.useState<StringDict | null>(null);
   const cluster = useCluster();
   const theme = useTheme();
   const [open, setOpen] = React.useState(false);
@@ -62,68 +77,46 @@ export default function VersionButton() {
     ];
   }
 
-  React.useEffect(
-    () => {
-      let stillAlive = true;
-      function fetchVersion() {
-        getVersion()
-          .then((results: StringDict) => {
-            if (!stillAlive) {
-              return;
+  const { data: clusterVersion } = useQuery<StringDict | null>({
+    placeholderData: null,
+    queryKey: ['version', cluster ?? ''],
+    queryFn: () => {
+      return getVersion()
+        .then((results: StringDict) => {
+          let versionChange = 0;
+          if (clusterVersion && results && results.gitVersion) {
+            versionChange = semver.compare(results.gitVersion, clusterVersion.gitVersion);
+
+            let msg = '';
+            if (versionChange > 0) {
+              msg = t('translation|Cluster version upgraded to {{ gitVersion }}', {
+                gitVersion: results.gitVersion,
+              });
+            } else if (versionChange < 0) {
+              msg = t('translation|Cluster version downgraded to {{ gitVersion }}', {
+                gitVersion: results.gitVersion,
+              });
             }
 
-            setClusterVersion(results);
-            let versionChange = 0;
-            if (clusterVersion && results && results.gitVersion) {
-              versionChange = semver.compare(results.gitVersion, clusterVersion.gitVersion);
-
-              let msg = '';
-              if (versionChange > 0) {
-                msg = t('translation|Cluster version upgraded to {{ gitVersion }}', {
-                  gitVersion: results.gitVersion,
-                });
-              } else if (versionChange < 0) {
-                msg = t('translation|Cluster version downgraded to {{ gitVersion }}', {
-                  gitVersion: results.gitVersion,
-                });
-              }
-
-              if (msg) {
-                enqueueSnackbar(msg, {
-                  key: 'version',
-                  preventDuplicate: true,
-                  autoHideDuration: versionSnackbarHideTimeout,
-                  variant: 'info',
-                });
-              }
+            if (msg) {
+              enqueueSnackbar(msg, {
+                key: 'version',
+                preventDuplicate: true,
+                autoHideDuration: versionSnackbarHideTimeout,
+                variant: 'info',
+              });
             }
-          })
-          .catch((error: Error) => console.error('Getting the cluster version:', error));
-      }
+          }
 
-      if (!clusterVersion) {
-        fetchVersion();
-      }
-
-      const intervalHandler = setInterval(() => {
-        fetchVersion();
-      }, versionFetchInterval);
-
-      return function cleanup() {
-        stillAlive = false;
-        clearInterval(intervalHandler);
-      };
+          return results;
+        })
+        .catch((error: Error) => {
+          console.error('Getting the cluster version:', error);
+          return null;
+        });
     },
-    // eslint-disable-next-line
-    [clusterVersion]
-  );
-
-  // Use the location to make sure the version is changed, as it depends on the cluster
-  // (defined in the URL ATM).
-  // @todo: Update this if the active cluster management is changed.
-  React.useEffect(() => {
-    setClusterVersion(null);
-  }, [cluster]);
+    refetchInterval: versionFetchInterval,
+  });
 
   function handleClose() {
     setOpen(false);
@@ -142,22 +135,22 @@ export default function VersionButton() {
     >
       <Button
         onClick={() => setOpen(true)}
-        style={{ textTransform: 'none', paddingBottom: 0, paddingTop: 0 }}
+        size="small"
+        sx={theme => ({ textTransform: 'none', color: theme.palette.sidebar.color })}
       >
         <Box display={isSidebarOpen ? 'flex' : 'block'} alignItems="center">
           <Box>
-            <VersionIcon color={theme.palette.text.secondary} icon="mdi:kubernetes" />
+            <VersionIcon color={theme.palette.sidebar.color} icon="mdi:kubernetes" />
           </Box>
           <Box>{clusterVersion.gitVersion}</Box>
         </Box>
       </Button>
-      <Dialog open={open} onClose={handleClose}>
-        <DialogTitle>{t('Kubernetes Version')}</DialogTitle>
+      <Dialog open={open} onClose={handleClose} title={t('Kubernetes Version')}>
         <DialogContent>
           <NameValueTable rows={getVersionRows()} />
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose} color="primary">
+          <Button onClick={handleClose} color="primary" variant="contained">
             {t('translation|Close')}
           </Button>
         </DialogActions>

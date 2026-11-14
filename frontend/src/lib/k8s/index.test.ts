@@ -1,10 +1,42 @@
-import { createRouteURL } from '../router';
-import { labelSelectorToQuery, ResourceClasses } from '.';
-import { KubeObjectClass, LabelSelector } from './cluster';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-// Remove NetworkPolicy since we don't use it.
+// Registers the app's routes (via setDefaultRoutes) so createRouteURL below has routes to resolve.
+import '../router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { createElement, type ReactNode } from 'react';
+import { afterEach, beforeEach, vi } from 'vitest';
+import { createRouteURL } from '../router/createRouteURL';
+import { labelSelectorToQuery, ResourceClasses, useClustersVersion } from '.';
+import { clusterRequest } from './api/v1/clusterRequests';
+import { Cluster, LabelSelector } from './cluster';
+import { KubeObjectClass } from './KubeObject';
+import Namespace from './namespace';
+
+vi.mock('./api/v1/clusterRequests', async () => {
+  const actual = await vi.importActual<typeof import('./api/v1/clusterRequests')>(
+    './api/v1/clusterRequests'
+  );
+  return { ...actual, clusterRequest: vi.fn() };
+});
+
+// Remove NetworkPolicy and ControllerRevision since we don't have list/details pages for them.
 const k8sClassesToTest = Object.values(ResourceClasses).filter(
-  cls => cls.className !== 'NetworkPolicy'
+  cls => cls.className !== 'NetworkPolicy' && cls.className !== 'ControllerRevision'
 );
 
 const mockK8sObject = (className: string) => ({
@@ -204,10 +236,76 @@ describe('Label selector', () => {
   });
 });
 
+describe('useClustersVersion', () => {
+  let queryClient: QueryClient;
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return createElement(QueryClientProvider, { client: queryClient }, children);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          refetchOnWindowFocus: false,
+          retry: false,
+          staleTime: 3 * 60_000,
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    queryClient.clear();
+    vi.resetAllMocks();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  test('returns versions and errors by cluster name', async () => {
+    const request = vi.mocked(clusterRequest);
+    request.mockImplementation((_path, params) => {
+      if (params?.cluster === 'unavailable') {
+        return Promise.reject(new Error('unavailable'));
+      }
+      return Promise.resolve({ gitVersion: 'v1.32.0' });
+    });
+
+    const clusters = [{ name: 'available' }, { name: 'unavailable' }] as Cluster[];
+    const { result } = renderHook(() => useClustersVersion(clusters), { wrapper });
+
+    await waitFor(() => expect(result.current[1].unavailable).toBeInstanceOf(Error));
+
+    expect(result.current[0]).toEqual({ available: { gitVersion: 'v1.32.0' } });
+    expect(result.current[1].available).toBeNull();
+  });
+
+  test('pauses polling while hidden and refetches immediately when visible', async () => {
+    const request = vi.mocked(clusterRequest).mockResolvedValue({ gitVersion: 'v1.32.0' });
+    const visibilityState = vi.spyOn(document, 'visibilityState', 'get');
+    visibilityState.mockReturnValue('visible');
+
+    renderHook(() => useClustersVersion([{ name: 'cluster' }] as Cluster[]), { wrapper });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    visibilityState.mockReturnValue('hidden');
+    act(() => window.dispatchEvent(new Event('visibilitychange')));
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
+    expect(request).toHaveBeenCalledTimes(1);
+
+    visibilityState.mockReturnValue('visible');
+    act(() => window.dispatchEvent(new Event('visibilitychange')));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  });
+});
+
 const notNamespacedClasses = [
   'ClusterRole',
   'ClusterRoleBinding',
   'CustomResourceDefinition',
+  'DeviceClass',
+  'GatewayClass',
   'IngressClass',
   'Namespace',
   'Node',
@@ -215,22 +313,35 @@ const notNamespacedClasses = [
   'PriorityClass',
   'RuntimeClass',
   'StorageClass',
+  'VolumeAttributesClass',
 ];
 
 const namespacedClasses = [
+  'CompositePodGroup',
   'ConfigMap',
+  'ControllerRevision',
   'CronJob',
   'DaemonSet',
   'Deployment',
   'Endpoint',
+  'Endpoints',
+  'EndpointSlice',
+  'GRPCRoute',
+  'Gateway',
   'HorizontalPodAutoscaler',
+  'HTTPRoute',
   'Ingress',
   'Job',
+  'JobSet',
+  'LeaderWorkerSet',
   'Lease',
   'LimitRange',
   'NetworkPolicy',
   'Pod',
+  'PodGroup',
   'ReplicaSet',
+  'ResourceClaim',
+  'ResourceClaimTemplate',
   'ResourceQuota',
   'Role',
   'RoleBinding',
@@ -238,12 +349,15 @@ const namespacedClasses = [
   'Service',
   'ServiceAccount',
   'StatefulSet',
+  'TCPRoute',
+  'UDPRoute',
   'PodDisruptionBudget',
   'PersistentVolumeClaim',
+  'Workload',
 ];
 
 describe('Test class namespaces', () => {
-  const classCopy = { ...ResourceClasses };
+  const classCopy: Record<string, KubeObjectClass> = { ...ResourceClasses };
   namespacedClasses.forEach(cls => {
     test(`Check namespaced ${cls}`, () => {
       expect(classCopy[cls]).toBeDefined();
@@ -262,5 +376,63 @@ describe('Test class namespaces', () => {
 
   test('Check all classes', () => {
     expect(classCopy).toEqual({});
+  });
+});
+
+/**
+ * This is a function test for the Namespace class.
+ * note: this test will not work correctly if used in its own environment (i.e. namespace.test.ts)
+ */
+describe('Namespace testing', () => {
+  describe('test working isValidNamespaceFormat', () => {
+    it('should return true for valid namespace', () => {
+      expect(Namespace.isValidNamespaceFormat('valid-namespace')).toBe(true);
+    });
+
+    it('should return false for namespace longer than 63 characters', () => {
+      const longNamespace = 'a'.repeat(64);
+      expect(Namespace.isValidNamespaceFormat(longNamespace)).toBe(false);
+    });
+
+    it('should return false for namespace with invalid characters', () => {
+      expect(Namespace.isValidNamespaceFormat('invalid_namespace')).toBe(false);
+    });
+
+    it('should return false for namespace with capital letters', () => {
+      expect(Namespace.isValidNamespaceFormat('InvalidNamespace')).toBe(false);
+    });
+
+    it('should return false for empty namespace', () => {
+      expect(Namespace.isValidNamespaceFormat('')).toBe(false);
+    });
+  });
+
+  describe('test isProtected', () => {
+    const makeNamespace = (name: string, labelName?: string) =>
+      new Namespace({
+        kind: 'Namespace',
+        apiVersion: 'v1',
+        metadata: {
+          name,
+          uid: `uid-${name}`,
+          creationTimestamp: '',
+          ...(labelName ? { labels: { 'kubernetes.io/metadata.name': labelName } } : {}),
+        },
+        status: { phase: 'Active' },
+      });
+
+    it.each(Namespace.PROTECTED_NAMESPACES)('should protect system namespace %s', name => {
+      expect(makeNamespace(name).isProtected()).toBe(true);
+    });
+
+    it('should not protect a regular namespace', () => {
+      expect(makeNamespace('my-app').isProtected()).toBe(false);
+    });
+
+    it('should match the kubernetes.io/metadata.name label over the object name', () => {
+      // Label says kube-system even though metadata.name differs.
+      expect(makeNamespace('renamed', 'kube-system').isProtected()).toBe(true);
+      expect(makeNamespace('kube-system', 'my-app').isProtected()).toBe(false);
+    });
   });
 });

@@ -1,30 +1,57 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { configureStore } from '@reduxjs/toolkit';
+import { SnackbarProvider } from 'notistack';
 import { PropsWithChildren } from 'react';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Route } from 'react-router-dom';
-import { KubeObject } from '../lib/k8s/cluster';
-import Event from '../lib/k8s/event';
+import { addEventCallback, HeadlampEvent } from '../redux/headlampEventSlice';
 import defaultStore from '../redux/stores/store';
+
+/**
+ * Origin (scheme/host/port) of the dev/test backend that MSW handlers intercept
+ * in stories and tests. Matches the default dev backend port used by `getAppUrl`
+ * (4466) but intentionally omits any baseUrl/trailing slash.
+ */
+export const API_BASE = 'http://localhost:4466';
+
+/**
+ * Collects the Headlamp events dispatched while a test runs, so tests can assert
+ * on the plugin-facing event contract (type + payload).
+ *
+ * Event callbacks cannot be unregistered, so every call gets its own array.
+ */
+export function recordHeadlampEvents(store: { dispatch: (action: any) => any } = defaultStore) {
+  const events: HeadlampEvent[] = [];
+  store.dispatch(addEventCallback(event => events.push(event)));
+  return events;
+}
 
 export type TestContextProps = PropsWithChildren<{
   store?: ReturnType<typeof configureStore>;
   routerMap?: Record<string, string>;
   urlPrefix?: string;
-  withObjectEvents?: boolean;
   urlSearchParams?: {
     [key: string]: string;
   };
 }>;
 
 export function TestContext(props: TestContextProps) {
-  const {
-    store,
-    routerMap,
-    urlPrefix = '',
-    urlSearchParams,
-    withObjectEvents = true,
-    children,
-  } = props;
+  const { store, routerMap, urlPrefix = '', urlSearchParams, children } = props;
   let url = '';
   let routePath = '';
 
@@ -44,40 +71,13 @@ export function TestContext(props: TestContextProps) {
     url += '?' + new URLSearchParams(urlSearchParams).toString();
   }
 
-  if (withObjectEvents) {
-    // override Event.objectEvents to return phony events array
-    Event.objectEvents = () =>
-      Promise.resolve([
-        {
-          type: 'Normal',
-          reason: 'Created',
-          message: 'Created',
-          source: {
-            component: 'kubelet',
-          },
-          firstTimestamp: '2021-03-01T00:00:00Z',
-          lastTimestamp: '2021-03-01T00:00:00Z',
-          count: 1,
-        },
-      ]);
-  }
-
   return (
     <Provider store={store || defaultStore}>
-      <MemoryRouter initialEntries={url ? [url] : undefined}>
-        {routePath ? <Route path={routePath}>{children}</Route> : children}
-      </MemoryRouter>
+      <SnackbarProvider>
+        <MemoryRouter initialEntries={url ? [url] : undefined}>
+          {routePath ? <Route path={routePath}>{children}</Route> : children}
+        </MemoryRouter>
+      </SnackbarProvider>
     </Provider>
   );
-}
-
-export function overrideKubeObject(
-  kubeObject: KubeObject,
-  propsToOverride: { [method: keyof KubeObject]: KubeObject[keyof KubeObject] | undefined }
-) {
-  for (const [key, value] of Object.entries(propsToOverride)) {
-    if (value !== undefined) {
-      kubeObject[key] = value;
-    }
-  }
 }

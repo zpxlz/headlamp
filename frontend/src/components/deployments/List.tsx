@@ -1,9 +1,27 @@
-import { Box } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Box from '@mui/material/Box';
 import { useTranslation } from 'react-i18next';
 import { KubeContainer } from '../../lib/k8s/cluster';
 import Deployment from '../../lib/k8s/deployment';
-import { LightTooltip, StatusLabel } from '../common';
+import { StatusLabel } from '../common/Label';
 import ResourceListView from '../common/Resource/ResourceListView';
+import LightTooltip from '../common/Tooltip/TooltipLight';
+import { sortByPods } from './sortByPods';
 
 export default function DeploymentsList() {
   const { t } = useTranslation(['glossary', 'translation']);
@@ -14,22 +32,21 @@ export default function DeploymentsList() {
     return `${availableReplicas || 0}/${replicas || 0}`;
   }
 
-  function sortByPods(d1: Deployment, d2: Deployment) {
-    const { replicas: r1, availableReplicas: avail1 } = d1.status;
-    const { replicas: r2, availableReplicas: avail2 } = d2.status;
-
-    const availSorted = avail1 - avail2;
-    if (availSorted === 0) {
-      return r1 - r2;
-    }
-
-    return availSorted;
-  }
-
   function renderConditions(deployment: Deployment) {
     const { conditions } = deployment.status;
     if (!conditions) {
       return null;
+    }
+
+    function renderStatus(c: any) {
+      const type = c.type?.toLowerCase();
+      const status = String(c.status)?.toLowerCase();
+
+      if (!type || !status) {
+        return '';
+      }
+
+      return status === 'true' ? 'success' : status === 'false' ? 'warning' : 'error';
     }
 
     return conditions
@@ -45,11 +62,9 @@ export default function DeploymentsList() {
       .map((condition: any) => {
         const { type, message } = condition;
         return (
-          <Box pr={0.5} display="inline-block">
-            <StatusLabel status="">
-              <span title={message} key={type}>
-                {type}
-              </span>
+          <Box display="inline-block" key={type}>
+            <StatusLabel status={renderStatus(condition)} title={message}>
+              {type}
             </StatusLabel>
           </Box>
         );
@@ -63,29 +78,45 @@ export default function DeploymentsList() {
       columns={[
         'name',
         'namespace',
+        'cluster',
         {
           id: 'pods',
           label: t('Pods'),
-          getter: deployment => renderPods(deployment),
+          disableFiltering: true,
+          getValue: deployment => deployment.status.availableReplicas ?? 0,
+          render: deployment => renderPods(deployment),
           sort: sortByPods,
-          gridTemplate: 0.5,
+          gridTemplate: 'min-content',
         },
         {
           id: 'replicas',
           label: t('Replicas'),
-          getter: deployment => deployment.spec.replicas || 0,
-          sort: true,
-          gridTemplate: 0.6,
+          getValue: deployment => deployment.spec.replicas || 0,
+          gridTemplate: 'min-content',
         },
         {
           id: 'conditions',
           label: t('translation|Conditions'),
-          getter: deployment => renderConditions(deployment),
+          getValue: deployment => deployment.status?.conditions?.map((c: any) => c.type)?.join(''),
+          render: deployment => renderConditions(deployment),
+          gridTemplate: 'auto',
+          cellProps: {
+            sx: {
+              flexWrap: 'wrap',
+              gap: '4px',
+            },
+          },
         },
         {
           id: 'containers',
           label: t('Containers'),
-          getter: deployment => {
+          gridTemplate: 'auto',
+          getValue: deployment =>
+            deployment
+              .getContainers()
+              .map(c => c.name)
+              .join(', '),
+          render: deployment => {
             const containers = deployment.getContainers().map((c: KubeContainer) => c.name);
             const containerText = containers.join(', ');
             const containerTooltip = containers.join('\n');
@@ -99,7 +130,13 @@ export default function DeploymentsList() {
         {
           id: 'images',
           label: t('Images'),
-          getter: deployment => {
+          gridTemplate: 'auto',
+          getValue: deployment =>
+            deployment
+              .getContainers()
+              .map(c => c.image)
+              .join(', '),
+          render: deployment => {
             const images = deployment.getContainers().map((c: KubeContainer) => c.image);
             const imageText = images.join(', ');
             const imageTooltip = images.join('\n');
@@ -113,7 +150,8 @@ export default function DeploymentsList() {
         {
           id: 'selector',
           label: t('Selector'),
-          getter: deployment => {
+          getValue: deployment => deployment.getMatchLabelsList().join(', '),
+          render: deployment => {
             const matchLabels = deployment.getMatchLabelsList();
             const text = matchLabels.join(', ');
             const tooltip = matchLabels.join('\n');
@@ -125,6 +163,7 @@ export default function DeploymentsList() {
           },
           show: false,
         },
+        'labels',
         'age',
       ]}
     />

@@ -1,9 +1,10 @@
 ---
 title: Kubernetes Metrics Server
-linkTitle: Metrics Server
+sidebar_label: Metrics Server
+sidebar_position: 4
 ---
 
-Headlamp can show information for resources usage if the Metrics Server is
+Headlamp can show information for resource usage if the Metrics Server is
 installed. If the Metrics Server is not installed, then a related notice is
 displayed as shown in the following screenshot:
 
@@ -21,4 +22,3 @@ enabling the
 ```shell
 minikube addons enable metrics-server
 ```
-

@@ -1,6 +1,24 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { vi } from 'vitest';
 import sidebarReducer, {
   DefaultSidebars,
   initialState,
+  setHomeSidebarItemFilter,
   setInitialSidebarOpen,
   setSidebarItem,
   setSidebarItemFilter,
@@ -60,6 +78,14 @@ describe('sidebarSlice', () => {
     });
   });
 
+  describe('setHomeSidebarItemFilter', () => {
+    it('should handle adding a new filter to the HOME sidebar', () => {
+      const filter = (entry: SidebarEntry) => (entry.name === 'Filtered' ? null : entry);
+      const state: SidebarState = sidebarReducer(initialState, setHomeSidebarItemFilter(filter));
+      expect(state.homeFilters).toContain(filter);
+    });
+  });
+
   describe('setWhetherSidebarOpen', () => {
     it('should handle setting the sidebar open state to true and storing it in localStorage', () => {
       const previousValue = localStorage.getItem('sidebar');
@@ -81,9 +107,11 @@ describe('sidebarSlice', () => {
 
 describe('setInitialSidebarOpen', () => {
   let originalInnerWidth: number;
+  let originalEnv: any;
 
   beforeEach(() => {
     originalInnerWidth = window.innerWidth;
+    originalEnv = import.meta.env.REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN;
     localStorage.clear();
   });
 
@@ -92,6 +120,12 @@ describe('setInitialSidebarOpen', () => {
     Object.defineProperty(window, 'innerWidth', {
       value: originalInnerWidth,
     });
+    // Restore original environment variable
+    if (originalEnv !== undefined) {
+      (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN = originalEnv;
+    } else {
+      delete (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN;
+    }
   });
 
   it('should use the value from localStorage when available', () => {
@@ -105,8 +139,30 @@ describe('setInitialSidebarOpen', () => {
     expect(setInitialSidebarOpen().isSidebarOpen).toBe(true);
   });
 
-  it('should use the window width when localStorage is not set', () => {
+  it('should use environment variable when localStorage is not set', () => {
     expect(localStorage.getItem('sidebar')).toBeNull();
+
+    // Test with environment variable set to true
+    (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN = 'true';
+    expect(setInitialSidebarOpen().isSidebarOpen).toBe(true);
+
+    // Test with environment variable set to false
+    (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN = 'false';
+    expect(setInitialSidebarOpen().isSidebarOpen).toBe(false);
+
+    // Test with environment variable set to 1 (true)
+    (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN = '1';
+    expect(setInitialSidebarOpen().isSidebarOpen).toBe(true);
+
+    // Test with environment variable set to 0 (false)
+    (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN = '0';
+    expect(setInitialSidebarOpen().isSidebarOpen).toBe(false);
+  });
+
+  it('should fall back to window width when neither localStorage nor environment variable is set', () => {
+    expect(localStorage.getItem('sidebar')).toBeNull();
+    delete (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN;
+
     // Set width less than md breakpoint.
     Object.defineProperty(window, 'innerWidth', {
       value: 800,
@@ -114,5 +170,28 @@ describe('setInitialSidebarOpen', () => {
     });
 
     expect(setInitialSidebarOpen().isSidebarOpen).toBe(false);
+  });
+
+  it('should prioritize localStorage over environment variable', () => {
+    localStorage.setItem('sidebar', JSON.stringify({ shrink: true }));
+    (import.meta.env as any).REACT_APP_HEADLAMP_SIDEBAR_DEFAULT_OPEN = 'true';
+
+    expect(setInitialSidebarOpen().isSidebarOpen).toBe(false);
+  });
+
+  it('should handle malformed or null localStorage values safely', () => {
+    // Suppress console.warn for this test to avoid polluting test output
+    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    localStorage.setItem('sidebar', 'null');
+    expect(() => setInitialSidebarOpen()).not.toThrow();
+
+    localStorage.setItem('sidebar', 'invalid json');
+    expect(() => setInitialSidebarOpen()).not.toThrow();
+
+    localStorage.setItem('sidebar', JSON.stringify({ shrink: 'not-a-boolean' }));
+    expect(() => setInitialSidebarOpen()).not.toThrow();
+
+    consoleSpy.mockRestore();
   });
 });

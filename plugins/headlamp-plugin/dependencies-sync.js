@@ -1,4 +1,21 @@
 #!/usr/bin/env node
+
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // @ts-check
 'use strict';
 
@@ -15,42 +32,69 @@
 // Some packages are used by headlamp-plugin that are not used by the frontend.
 // These won't be removed from headlamp-plugin/package.json
 const dependenciesFrontDoesNotHave = new Set([
-  '@babel/cli',
-  '@babel/core',
-  '@babel/plugin-proposal-class-properties',
-  '@babel/plugin-transform-react-jsx',
-  '@babel/preset-env',
-  '@babel/preset-react',
-  '@babel/preset-typescript',
-  '@remix-run/router',
-  '@svgr/webpack',
-  'babel-loader',
-  'css-loader',
   'env-paths',
-  'eslint-plugin-jsx-a11y',
-  'file-loader',
-  'filemanager-webpack-plugin',
-  'fs-extra',
-  'imports-loader',
   'shx',
-  'style-loader',
-  'url-loader',
+  'fs-extra',
   'validate-npm-package-name',
-  'webpack-cli',
   'yargs',
-  'is-plain-object',
-  'tsconfig-paths-webpack-plugin',
-  'vm-browserify',
+  'table',
+  'tar',
+  'vite-plugin-css-injected-by-js',
+  'vite-plugin-static-copy',
+  '@storybook/addon-webpack5-compiler-swc',
+  '@storybook/react-webpack5',
+  'ts-loader',
+  '@typescript-eslint/parser',
+  '@headlamp-k8s/pluginctl',
+  'path-browserify',
+  'process',
 ]);
 
 // Dependencies from frontend/package.json that aren't wanted by headlamp-plugin.
 // These won't be added to headlamp-plugin/package.json
 const dependenciesToNotCopy = [
+  '@storybook/test',
   'husky',
   'typedoc',
   'typedoc-hugo-theme',
   'typedoc-plugin-markdown',
   'typedoc-plugin-rename-defaults',
+  'eslint-plugin-license-header',
+  '@rsbuild/core',
+  '@rsbuild/plugin-node-polyfill',
+  '@rsbuild/plugin-react',
+  '@rsbuild/plugin-svgr',
+  'nock',
+  'vitest-websocket-mock',
+  'cross-env',
+  'fake-indexeddb',
+  'lint-staged',
+  'openapi-types',
+  'remark-gfm',
+  'resize-observer-polyfill',
+  'vitest-canvas-mock',
+  '@tanstack/react-query-devtools',
+  'remark-gfm',
+  '@typescript/native-preview',
+  '@chanzuckerberg/axe-storybook-testing',
+  'tsx',
+];
+
+// Dependencies that can have different versions
+// vitest 4 crashes npm 10 on fresh installs, so plugin authors use vitest 5,
+// which needs @types/node 22 or newer.
+// The toolkit uses Storybook 10 to remove Storybook 9's pinned mocker dependency.
+const differentlyVersionedDependencies = [
+  // Plugin projects can opt into a TS6 compiler API alongside the TS7 CLI.
+  '@typescript-eslint/eslint-plugin',
+  'eslint-plugin-react-hooks',
+  'vitest',
+  '@vitest/coverage-istanbul',
+  '@types/node',
+  'storybook',
+  '@storybook/addon-docs',
+  '@storybook/addon-links',
+  '@storybook/react-vite',
 ];
 
 const yargs = require('yargs/yargs');
@@ -92,6 +136,22 @@ function updateDependencies(packageJsonPath, checkOnly) {
   // Some dependencies from frontend/ aren't wanted.
   for (const packageName of dependenciesToNotCopy) {
     delete headlampPluginPkg.dependencies[packageName];
+  }
+
+  // Check if dependenciesFrontDoesNotHave are also present here
+  {
+    const staleDeps = [];
+    for (const packageName of dependenciesFrontDoesNotHave) {
+      if (headlampPluginPkg.dependencies[packageName] === undefined) {
+        staleDeps.push(packageName);
+      }
+    }
+    if (staleDeps.length > 0) {
+      console.log(
+        `\nSTALE Dependencies. Both headlamp-plugin and front doesn't have them.\nRemove them from dependenciesFrontDoesNotHave in dedendencies-sync.js:\n`,
+        staleDeps
+      );
+    }
   }
 
   // We want to find if packages are removed from frontend/package.json too.
@@ -160,6 +220,8 @@ function updateDependencies(packageJsonPath, checkOnly) {
     const changed = [];
 
     for (const [key, value] of Object.entries(dependencies)) {
+      if (differentlyVersionedDependencies.includes(key)) continue;
+
       if (dependenciesFront[key] !== undefined && dependenciesFront[key] !== value) {
         changed.push({ name: key, frontend: dependenciesFront[key], headlampPlugin: value });
         dependencies[key] = dependenciesFront[key];

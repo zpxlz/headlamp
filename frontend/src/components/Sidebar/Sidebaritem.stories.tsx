@@ -1,6 +1,22 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import Grid from '@mui/material/Grid';
 import List from '@mui/material/List';
-import { Meta, Story } from '@storybook/react';
+import { Meta, StoryFn } from '@storybook/react';
 import React from 'react';
 import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
@@ -20,7 +36,7 @@ export default {
   ],
 } as Meta;
 
-const Template: Story<SidebarItemProps> = args => {
+const Template: StoryFn<SidebarItemProps> = args => {
   return (
     <Provider store={store}>
       <Grid item style={{ backgroundColor: 'rgba(0, 0, 0, 0.87)' }}>
@@ -34,7 +50,7 @@ const Template: Story<SidebarItemProps> = args => {
 
 export const Selected = Template.bind({});
 Selected.args = {
-  selectedName: 'cluster',
+  isSelected: true,
   name: 'cluster',
   label: 'Cluster',
   icon: 'mdi:hexagon-multiple-outline',
@@ -43,7 +59,7 @@ Selected.args = {
 
 export const Unselected = Template.bind({});
 Unselected.args = {
-  selectedName: 'meow',
+  isSelected: false,
   name: 'cluster',
   label: 'Cluster',
   icon: 'mdi:hexagon-multiple-outline',
@@ -52,14 +68,14 @@ Unselected.args = {
 
 export const SublistExpanded = Template.bind({});
 SublistExpanded.args = {
-  selectedName: 'cluster',
+  isSelected: true,
   name: 'cluster',
   label: 'Cluster',
   fullWidth: true,
   icon: 'mdi:hexagon-multiple-outline',
   subList: [
     {
-      selectedName: 'cluster',
+      isSelected: false,
       name: 'namespaces',
       label: 'Namespaces',
       hasParent: true,
@@ -69,17 +85,47 @@ SublistExpanded.args = {
 
 export const Sublist = Template.bind({});
 Sublist.args = {
-  selectedName: 'meow',
+  isSelected: false,
   name: 'cluster',
   label: 'Cluster',
   fullWidth: true,
   icon: 'mdi:hexagon-multiple-outline',
   subList: [
     {
-      selectedName: 'cluster',
+      isSelected: false,
       name: 'namespaces',
       label: 'Namespaces',
       hasParent: true,
     },
   ],
+};
+
+export const SectionHeader = Template.bind({});
+SectionHeader.args = {
+  name: 'section-header',
+  label: 'Plugin Section',
+  entryType: 'subheader',
+  fullWidth: true,
+};
+
+export const CollapsedSectionHeader = Template.bind({});
+CollapsedSectionHeader.args = {
+  name: 'collapsed-section-header',
+  label: 'Plugin Section',
+  entryType: 'subheader',
+  fullWidth: false,
+};
+
+export const StyledSectionHeader = Template.bind({});
+StyledSectionHeader.args = {
+  name: 'styled-section-header',
+  label: 'Plugin Section',
+  entryType: 'subheader',
+  fullWidth: true,
+  sx: {
+    color: '#90caf9',
+    fontSize: '1.1rem',
+    fontWeight: 800,
+    textTransform: 'none',
+  },
 };

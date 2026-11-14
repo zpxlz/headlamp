@@ -1,4 +1,22 @@
-import { Box, Link as MuiLink, Typography } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Box from '@mui/material/Box';
+import MuiLink from '@mui/material/Link';
+import Typography from '@mui/material/Typography';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
 import Ingress, { IngressBackend, IngressRule } from '../../lib/k8s/ingress';
@@ -13,7 +31,7 @@ import SimpleTable from '../common/SimpleTable';
  * Is https used in the ingress item
  */
 function isHttpsUsed(item: Ingress, url: String) {
-  const hostList: string[] = item.jsonData.spec?.tls?.map(({ ...hosts }) => `${hosts.hosts}`);
+  const hostList = item.jsonData.spec?.tls?.map(({ ...hosts }) => `${hosts.hosts}`) ?? [];
   const isHttps = hostList.includes(`${url}`);
 
   return isHttps;
@@ -23,12 +41,18 @@ export interface LinkStringFormatProps {
   url: string;
   item: Ingress;
   urlPath?: string;
+  /**
+   * The pathType of the path being rendered. Pass it whenever the caller holds the
+   * path entry: (host, path) is not unique across rules, so it cannot be recovered
+   * reliably from the item. Only looked up when omitted.
+   */
+  pathType?: string;
 }
 
 /**
  * Format the url to be used in the Link component
  */
-export function LinkStringFormat({ url, item, urlPath }: LinkStringFormatProps) {
+export function LinkStringFormat({ url, item, urlPath, pathType }: LinkStringFormatProps) {
   let urlProtocol;
   let formatURL;
 
@@ -59,19 +83,21 @@ export function LinkStringFormat({ url, item, urlPath }: LinkStringFormatProps) 
     }
 
     /*
-     * Since we cannot access the prefix from the ingress object, we have to access it from the rules array
+     * The pathType is not part of the rendered path, so when the caller did not pass
+     * it, look it up from the rules. Scope the lookup to the rules for this row's
+     * host: different hosts may expose the same path with different path types, and
+     * a host-agnostic search would report whichever rule happened to come last.
+     *
+     * getRules() is used rather than spec.rules because it normalizes rules that
+     * carry no http block (which is valid for a networking.k8s.io/v1 Ingress).
      */
-    const rules: any[] = item.spec.rules;
-    let currentPathType;
-    if (rules) {
-      for (let i = 0; i < rules.length; i++) {
-        for (let j = 0; j < rules[i].http.paths.length; j++) {
-          if (rules[i].http.paths[j].path === urlPath) {
-            currentPathType = rules[i].http.paths[j].pathType;
-          }
-        }
-      }
-    }
+    const currentPathType =
+      pathType ??
+      item
+        .getRules()
+        .filter(rule => (rule.host || '*') === url)
+        .flatMap(rule => rule.http?.paths ?? [])
+        .find(path => path.path === urlPath)?.pathType;
 
     function isValidURL(url: string): boolean {
       try {
@@ -101,7 +127,7 @@ export function LinkStringFormat({ url, item, urlPath }: LinkStringFormatProps) 
           >
             {urlPath}
           </MuiLink>
-          {`(${currentPathType})`}
+          {currentPathType && `(${currentPathType})`}
         </Box>
       );
     }
@@ -152,15 +178,20 @@ export function BackendFormat({ backend }: BackendFormatProps) {
   );
 }
 
-export default function IngressDetails() {
-  const { namespace, name } = useParams<{ namespace: string; name: string }>();
+export default function IngressDetails(props: {
+  name?: string;
+  namespace?: string;
+  cluster?: string;
+}) {
+  const params = useParams<{ namespace: string; name: string }>();
+  const { name = params.name, namespace = params.namespace, cluster } = props;
   const { t } = useTranslation(['glossary', 'translation']);
   const storeRowsPerPageOptions = useSettings('tableRowsPerPageOptions');
 
   function getPorts(item: Ingress) {
     const ports: string[] = [];
     item.getRules().forEach(rule => {
-      rule.http.paths.forEach(path => {
+      rule.http?.paths.forEach(path => {
         if (!!path.backend.service) {
           const portNumber =
             path.backend.service.port.number ?? path.backend.service.port.name ?? '';
@@ -181,7 +212,7 @@ export default function IngressDetails() {
   function getDefaultBackend(item: Ingress) {
     const { service, resource } = item.spec?.defaultBackend || {};
     return (
-      (service && service.name + ':' + service.port.toString()) ||
+      (service && service.name + ':' + (service.port.number ?? service.port.name ?? '-')) ||
       (resource && resource.kind + '/' + resource.name) ||
       '-'
     );
@@ -192,9 +223,19 @@ export default function IngressDetails() {
       resourceType={Ingress}
       name={name}
       namespace={namespace}
+      cluster={cluster}
       withEvents
-      extraInfo={ingress =>
-        ingress && [
+      extraInfo={ingress => {
+        if (!ingress) {
+          return null;
+        }
+        const addresses = ingress.getAddresses();
+        return [
+          {
+            name: t('translation|Address'),
+            value: addresses,
+            hide: !addresses,
+          },
           {
             name: t('Default Backend'),
             value: getDefaultBackend(ingress),
@@ -209,7 +250,7 @@ export default function IngressDetails() {
               <LabelListItem
                 labels={ingress.spec?.tls?.map(
                   (tls: { hosts: string[]; secretName: string }) =>
-                    `${tls.secretName} 🞂 ${tls.hosts.join(', ')}`
+                    `${tls.secretName} › ${tls.hosts.join(', ')}`
                 )}
               />
             ),
@@ -217,13 +258,17 @@ export default function IngressDetails() {
           {
             name: t('Class Name'),
             value: ingress.spec?.ingressClassName ? (
-              <Link routeName="ingressclass" params={{ name: ingress.spec?.ingressClassName }}>
+              <Link
+                routeName="ingressclass"
+                params={{ name: ingress.spec?.ingressClassName }}
+                activeCluster={ingress.cluster}
+              >
                 {ingress.spec?.ingressClassName}
               </Link>
             ) : null,
           },
-        ]
-      }
+        ];
+      }}
       extraSections={item => [
         {
           id: 'headlamp.ingress-rules',
@@ -242,19 +287,24 @@ export default function IngressDetails() {
                   {
                     label: t('translation|Path'),
                     getter: (data: IngressRule) =>
-                      data.http.paths.map(({ path }) => (
+                      data.http?.paths.map(({ path, pathType }, index) => (
+                        // A rule may list the same path more than once (e.g. once per
+                        // pathType), so the path alone is not a unique key.
                         <LinkStringFormat
-                          key={path}
+                          key={`${index}-${path}`}
                           url={data.host || '*'}
                           item={item}
                           urlPath={path}
+                          pathType={pathType}
                         />
                       )),
                   },
                   {
                     label: t('Backends'),
                     getter: (data: IngressRule) => (
-                      <BackendFormat backend={data.http.paths.map(({ backend }) => backend)} />
+                      <BackendFormat
+                        backend={data.http?.paths.map(({ backend }) => backend) ?? []}
+                      />
                     ),
                   },
                 ]}

@@ -1,7 +1,29 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { expect, Page } from '@playwright/test';
+import { runA11yScan } from './a11yHelper';
 
 export class podsPage {
   constructor(private page: Page) {}
+
+  /** Checks the pods page while ignoring tooltip landmark placement. */
+  async a11y(): Promise<void> {
+    await runA11yScan(this.page, expect, ['[role="tooltip"]']);
+  }
 
   async navigateToPods() {
     await this.page.click('span:has-text("Workloads")');
@@ -9,6 +31,8 @@ export class podsPage {
     await this.page.waitForSelector('span:has-text("Pods")');
     await this.page.waitForLoadState('load');
     await this.page.click('span:has-text("Pods")');
+
+    await this.a11y();
 
     console.log('Now on the pods page');
   }
@@ -35,8 +59,8 @@ spec:
       return;
     }
 
-    await expect(page.getByRole('button', { name: 'Create' })).toBeVisible();
-    await page.getByRole('button', { name: 'Create' }).click();
+    await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
 
     await page.waitForLoadState('load');
 
@@ -46,20 +70,31 @@ spec:
     await page.waitForLoadState('load');
     await page.fill('textarea[aria-label="yaml Code"]', yaml);
 
-    await expect(page.getByRole('button', { name: 'Apply' })).toBeVisible();
-    await page.getByRole('button', { name: 'Apply' }).click();
+    await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
 
-    await page.waitForSelector(`text=Applied ${name}`);
-    await expect(page.getByRole('link', { name: name })).toBeVisible();
+    const appliedSnackbar = page.getByText(`Applied ${name}`, { exact: true });
+    await appliedSnackbar.waitFor({ state: 'visible' });
+    await appliedSnackbar.waitFor({ state: 'hidden' });
+
+    const podLink = page.getByRole('link', { name: name });
+    try {
+      await podLink.waitFor({ state: 'visible', timeout: 10000 });
+    } catch (error) {
+      await page.reload({ waitUntil: 'networkidle' });
+    }
+    await expect(podLink).toBeVisible();
 
     console.log(`Created pod ${name}`);
+    await expect(page.getByText(`Applied ${name}.`, { exact: true })).toBeHidden({
+      timeout: 10000,
+    });
+    await this.a11y();
   }
 
   async deletePod(name) {
     const page = this.page;
 
-    await page.click('span:has-text("Pods")');
-    await page.waitForLoadState('load');
     await page.waitForSelector(`a:has-text("${name}")`);
 
     await expect(page.getByRole('link', { name: name })).toBeVisible();
@@ -68,27 +103,27 @@ spec:
     await expect(page.getByRole('button', { name: 'Delete' })).toBeVisible();
     await page.getByRole('button', { name: 'Delete' }).click();
 
-    await page.waitForSelector('text=Are you sure you want to delete this item?');
+    await expect(page.getByRole('dialog')).toBeVisible();
 
-    await expect(page.getByRole('button', { name: 'Yes' })).toBeVisible();
-    await page.getByRole('button', { name: 'Yes' }).click();
+    await expect(page.locator('button[aria-label="confirm-button"]')).toBeVisible();
+    await page.locator('button[aria-label="confirm-button"]').click();
 
     await page.waitForSelector(`text=Deleted item ${name}`);
 
     console.log(`Deleted pod ${name}`);
+    await this.a11y();
   }
 
   async confirmPodCreation(name) {
-    await this.page.waitForSelector(`a:has-text("${name}")`);
-    await expect(this.page.locator(`a:has-text("${name}")`)).toBeVisible();
+    const podLink = this.page.locator(`a:has-text("${name}")`);
+    try {
+      await podLink.waitFor({ state: 'visible', timeout: 10000 });
+    } catch (error) {
+      await this.page.reload({ waitUntil: 'networkidle' });
+    }
+    await expect(podLink).toBeVisible();
 
     console.log(`Pod ${name} is running`);
-  }
-
-  async confirmPodDeletion(name) {
-    await this.page.waitForSelector(`a:has-text("${name}")`);
-    await expect(this.page.locator(`a:has-text("${name}")`)).not.toBeVisible();
-
-    console.log(`Pod ${name} is deleted`);
+    await this.a11y();
   }
 }

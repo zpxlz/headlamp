@@ -1,22 +1,132 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
-import { KubeObject, Workload } from '../../lib/k8s/cluster';
+import { useLocation, useParams } from 'react-router-dom';
+import type { ApiError } from '../../lib/k8s/api/v2/ApiError';
+import type { KubeObject } from '../../lib/k8s/KubeObject';
+import type Pod from '../../lib/k8s/pod';
+import type { Workload, WorkloadClass } from '../../lib/k8s/Workload';
+import { useEventCallback } from '../../redux/headlampEventSlice';
+import Link from '../common/Link';
 import {
   ConditionsSection,
   ContainersSection,
   DetailsGrid,
+  launchWorkloadLogs,
+  LOGGABLE_WORKLOAD_KINDS,
+  LogsButton,
   MetadataDictGrid,
+  OwnedJobsSection,
   OwnedPodsSection,
+  OwnedStatefulSetsSection,
+  RevisionHistorySection,
+  RollbackButton,
 } from '../common/Resource';
+import { WorkloadDiagnosticsSection } from '../diagnostics/Diagnostics';
+import { KIND_EXTRA_INFO } from './extraInfo';
 
-interface WorkloadDetailsProps {
-  workloadKind: KubeObject;
+interface WorkloadDetailsProps<T extends WorkloadClass> {
+  workloadKind: T;
+  name?: string;
+  namespace?: string;
+  cluster?: string;
 }
 
-export default function WorkloadDetails(props: WorkloadDetailsProps) {
-  const { namespace, name } = useParams<{ namespace: string; name: string }>();
+// `null` (still loading) must stay distinct from `[]` (loaded, no pods), or a
+// transition between the two looks like a no-op and leaves the section spinning.
+const LOADING_KEY = '\u0000loading';
+
+function getOwnedPodsKey(pods: Pod[] | null) {
+  if (pods === null) return LOADING_KEY;
+  return pods
+    .map(pod =>
+      [pod.metadata.uid, pod.metadata.namespace, pod.metadata.name, pod.metadata.resourceVersion]
+        .filter(Boolean)
+        .join('/')
+    )
+    .join('|');
+}
+
+function getOwnedPodsErrorsKey(errors: ApiError[] | null) {
+  if (errors === null) return LOADING_KEY;
+  return errors.map(error => error.toString()).join('|');
+}
+
+export default function WorkloadDetails<T extends WorkloadClass>(props: WorkloadDetailsProps<T>) {
+  const params = useParams<{ namespace: string; name: string }>();
+  const { name = params.name, namespace = params.namespace, cluster } = props;
   const { workloadKind } = props;
   const { t } = useTranslation(['glossary', 'translation']);
+
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const autoLaunchView = queryParams.get('view');
+  const lastAutoLaunchedLogs = React.useRef<string | null>(null);
+  const [workloadItem, setWorkloadItem] = React.useState<Workload | null>(null);
+  const [ownedPodsState, setOwnedPodsState] = React.useState<{
+    workloadUid?: string;
+    pods: Pod[] | null;
+    errors: ApiError[] | null;
+    podsKey?: string;
+    errorsKey?: string;
+  }>({ pods: null, errors: null });
+  const dispatchHeadlampEvent = useEventCallback();
+  const isLoggableKind = LOGGABLE_WORKLOAD_KINDS.has(workloadKind.kind);
+  const handleOwnedPodsUpdate = React.useCallback(
+    (resource: KubeObject, pods: Pod[] | null, errors: ApiError[] | null) => {
+      setOwnedPodsState(previous => {
+        const workloadUid = resource.metadata.uid;
+        const podsKey = getOwnedPodsKey(pods);
+        const errorsKey = getOwnedPodsErrorsKey(errors);
+        if (
+          previous.workloadUid === workloadUid &&
+          previous.podsKey === podsKey &&
+          previous.errorsKey === errorsKey
+        ) {
+          return previous;
+        }
+
+        return {
+          workloadUid,
+          pods,
+          errors,
+          podsKey,
+          errorsKey,
+        };
+      });
+    },
+    []
+  );
+
+  React.useEffect(() => {
+    if (autoLaunchView !== 'logs') {
+      lastAutoLaunchedLogs.current = null;
+      return;
+    }
+    if (
+      isLoggableKind &&
+      workloadItem &&
+      lastAutoLaunchedLogs.current !== workloadItem.metadata.uid
+    ) {
+      lastAutoLaunchedLogs.current = workloadItem.metadata.uid;
+      launchWorkloadLogs(workloadItem, dispatchHeadlampEvent);
+    }
+  }, [workloadItem, autoLaunchView, isLoggableKind, dispatchHeadlampEvent]);
 
   function renderUpdateStrategy(item: Workload) {
     if (!item?.spec?.strategy) {
@@ -79,10 +189,51 @@ export default function WorkloadDetails(props: WorkloadDetailsProps) {
     <DetailsGrid
       resourceType={workloadKind}
       name={name}
-      withEvents
       namespace={namespace}
-      extraInfo={item =>
-        item && [
+      cluster={cluster}
+      withEvents
+      onResourceUpdate={item => {
+        setWorkloadItem(item);
+        setOwnedPodsState(previous =>
+          previous.workloadUid === item?.metadata.uid
+            ? previous
+            : {
+                workloadUid: item?.metadata.uid,
+                pods: null,
+                errors: null,
+                podsKey: getOwnedPodsKey(null),
+                errorsKey: getOwnedPodsErrorsKey(null),
+              }
+        );
+      }}
+      actions={item => {
+        if (!item) return [];
+        const actions = [];
+
+        if (isLoggableKind) {
+          actions.push({
+            id: 'logs',
+            action: <LogsButton key="logs" item={item} />,
+          });
+        }
+
+        const isRollbackable = ['Deployment', 'DaemonSet', 'StatefulSet'].includes(
+          workloadKind.kind
+        );
+        if (isRollbackable) {
+          actions.push({
+            id: 'rollback',
+            action: <RollbackButton key="rollback" item={item} />,
+          });
+        }
+
+        return actions;
+      }}
+      extraInfo={item => {
+        if (!item) return [];
+        const extraInfoFn = KIND_EXTRA_INFO[workloadKind.kind];
+        const extraRows = extraInfoFn ? extraInfoFn(item, t) : [];
+        return [
           {
             name: t('Strategy Type'),
             value: renderUpdateStrategy(item),
@@ -97,28 +248,110 @@ export default function WorkloadDetails(props: WorkloadDetailsProps) {
             ),
           },
           {
+            name: t('Node Selector'),
+            value: item.spec?.template?.spec?.nodeSelector && (
+              <MetadataDictGrid
+                dict={item.spec.template.spec.nodeSelector as { [key: string]: string }}
+              />
+            ),
+          },
+          {
+            name: t('Service Account'),
+            value: (
+              <Link
+                routeName="serviceAccount"
+                params={{
+                  namespace: item.metadata.namespace,
+                  name:
+                    item.spec?.template?.spec?.serviceAccountName ||
+                    item.spec?.template?.spec?.serviceAccount ||
+                    'default',
+                }}
+                activeCluster={item.cluster}
+              >
+                {item.spec?.template?.spec?.serviceAccountName ||
+                  item.spec?.template?.spec?.serviceAccount ||
+                  'default'}
+              </Link>
+            ),
+          },
+          {
             name: t('Replicas'),
             value: renderReplicas(item),
             hide: !showReplicas(item),
           },
-        ]
-      }
-      extraSections={item =>
-        item && [
+          ...extraRows,
+        ];
+      }}
+      extraSections={item => {
+        if (!item) return [];
+        const sections = [
+          {
+            id: 'headlamp.workload-diagnostics',
+            section: (
+              <WorkloadDiagnosticsSection
+                workload={item}
+                pods={ownedPodsState.workloadUid === item.metadata.uid ? ownedPodsState.pods : null}
+                errors={
+                  ownedPodsState.workloadUid === item.metadata.uid ? ownedPodsState.errors : null
+                }
+              />
+            ),
+          },
           {
             id: 'headlamp.workload-conditions',
             section: <ConditionsSection resource={item?.jsonData} />,
           },
+          ...(workloadKind.kind === 'JobSet'
+            ? [
+                {
+                  id: 'headlamp.workload-owned-jobs',
+                  section: <OwnedJobsSection resource={item} />,
+                },
+              ]
+            : []),
+          // A leader worker set owns a stateful set per group, which in turn
+          // owns the leader and worker pods listed below.
+          ...(workloadKind.kind === 'LeaderWorkerSet'
+            ? [
+                {
+                  id: 'headlamp.workload-owned-statefulsets',
+                  section: <OwnedStatefulSetsSection resource={item} />,
+                },
+              ]
+            : []),
           {
             id: 'headlamp.workload-owned-pods',
-            section: <OwnedPodsSection resource={item?.jsonData} />,
+            section: <OwnedPodsSection resource={item} onPodsUpdate={handleOwnedPodsUpdate} />,
           },
-          {
-            id: 'headlamp.workload-containers',
-            section: <ContainersSection resource={item?.jsonData} />,
-          },
-        ]
-      }
+          // ContainersSection reads spec.containers or spec.template.spec.containers.
+          // A leader worker set has neither, keeping its containers under
+          // spec.leaderWorkerTemplate, so the section would render as an untitled
+          // empty placeholder. The leader and worker containers are already visible
+          // in the owned stateful sets listed above.
+          ...(workloadKind.kind === 'LeaderWorkerSet'
+            ? []
+            : [
+                {
+                  id: 'headlamp.workload-containers',
+                  section: <ContainersSection resource={item} />,
+                },
+              ]),
+        ];
+
+        // Add revision history for rollbackable workloads
+        const isRollbackable = ['Deployment', 'DaemonSet', 'StatefulSet'].includes(
+          workloadKind.kind
+        );
+        if (isRollbackable) {
+          sections.push({
+            id: 'headlamp.workload-revision-history',
+            section: <RevisionHistorySection resource={item} />,
+          });
+        }
+
+        return sections;
+      }}
     />
   );
 }

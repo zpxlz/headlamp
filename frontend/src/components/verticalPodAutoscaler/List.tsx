@@ -1,10 +1,28 @@
-import { Link, Paper, Typography } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Link from '@mui/material/Link';
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import VPA from '../../lib/k8s/vpa';
-import { SectionBox } from '../common';
 import Empty from '../common/EmptyContent';
 import ResourceListView from '../common/Resource/ResourceListView';
+import SectionBox from '../common/SectionBox';
 
 export default function VpaList() {
   const { t } = useTranslation(['glossary', 'translation']);
@@ -37,22 +55,23 @@ export default function VpaList() {
           columns={[
             'name',
             'namespace',
+            'cluster',
             {
               id: 'cpu',
               label: t('glossary|CPU'),
-              getter: item => item?.targetRecommendations?.cpu,
+              getValue: item => item?.targetRecommendations?.cpu ?? null,
             },
             {
               id: 'memory',
               label: t('glossary|Memory'),
-              getter: item => item?.targetRecommendations?.memory,
+              getValue: item => item?.targetRecommendations?.memory ?? null,
             },
             {
               id: 'provided',
               label: t('translation|Provided'),
-              getter: item => item?.status?.conditions?.[0]?.status,
-              sort: true,
+              getValue: item => item?.status?.conditions?.[0]?.status ?? null,
             },
+            'labels',
             'age',
           ]}
         />
@@ -67,6 +86,7 @@ export default function VpaList() {
                     href="https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler#installation"
                     target="_blank"
                     rel="noopener"
+                    sx={{ textDecoration: 'underline' }}
                   >
                     Learn More
                   </Link>

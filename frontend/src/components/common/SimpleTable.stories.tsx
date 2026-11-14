@@ -1,8 +1,25 @@
-import { Box, Typography } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import { configureStore } from '@reduxjs/toolkit';
 import { Meta, StoryFn } from '@storybook/react';
 import { useLocation } from 'react-router-dom';
-import { KubeObjectInterface } from '../../lib/k8s/cluster';
+import { KubeObjectInterface } from '../../lib/k8s/KubeObject';
 import { useFilterFunc } from '../../lib/util';
 import { TestContext, TestContextProps } from '../../test';
 import SectionFilterHeader from './SectionFilterHeader';
@@ -38,7 +55,7 @@ const Template: StoryFn<SimpleTableProps> = args => (
 );
 
 const fixtureData = {
-  rowsPerPage: [15, 25, 50],
+  rowsPerPage: [15, 25, 50, 100],
   errorMessage: null,
   columns: [
     {
@@ -99,6 +116,7 @@ Getter.args = {
       label: 'Name',
       // datum: "",
       getter: (row: any) => row.name,
+      sort: true,
     },
     {
       label: 'Status',
@@ -223,31 +241,30 @@ ReflectInURLWithPrefix.args = {
 
 // filter Function
 
-type SimpleTableWithFilterProps = SimpleTableProps & { matchCriteria?: string[] };
+type SimpleTableWithFilterProps = SimpleTableProps & { matchCriteria?: string[]; search?: string };
 function SimpleTableWithFilter(props: SimpleTableWithFilterProps) {
-  const { matchCriteria, ...otherProps } = props;
+  const { matchCriteria, search, ...otherProps } = props;
   const filterFunc = useFilterFunc(matchCriteria);
-  return <SimpleTable filterFunction={filterFunc} {...otherProps} />;
+  return <SimpleTable filterFunction={item => filterFunc(item, search)} {...otherProps} />;
 }
 
 const TemplateWithFilter: StoryFn<{
   simpleTableArgs: SimpleTableWithFilterProps;
   namespaces: string[];
-  search: string;
+  search?: string;
 }> = args => {
-  const { simpleTableArgs, search, namespaces = [] } = args;
+  const { simpleTableArgs, namespaces = [], search } = args;
 
   const storeWithFilterAndSettings = configureStore({
     reducer: (
       state = {
-        filter: { namespaces: new Set<string>(), search: '' },
+        filter: { namespaces: new Set<string>() },
         config: { settings: { tableRowsPerPageOptions: [10, 20, 50, 100] } },
       }
     ) => state,
     preloadedState: {
       filter: {
         namespaces: new Set(namespaces),
-        search,
       },
       config: {
         settings: {
@@ -260,13 +277,13 @@ const TemplateWithFilter: StoryFn<{
   return (
     <TestContext store={storeWithFilterAndSettings}>
       <SectionFilterHeader title="Test" />
-      <SimpleTableWithFilter {...simpleTableArgs} />
+      <SimpleTableWithFilter {...simpleTableArgs} search={search} />
     </TestContext>
   );
 };
 
 const podData = {
-  rowsPerPage: [15, 25, 50],
+  rowsPerPage: [15, 25, 50, 100],
   errorMessage: null,
   columns: [
     {

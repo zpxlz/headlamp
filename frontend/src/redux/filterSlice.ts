@@ -1,18 +1,35 @@
-import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createSlice } from '@reduxjs/toolkit';
 import { JSONPath } from 'jsonpath-plus';
-import { KubeObjectInterface } from '../lib/k8s/cluster';
-import { KubeEvent } from '../lib/k8s/event';
+import { useMemo } from 'react';
+import { useSelector } from 'react-redux';
+import type { KubeEvent } from '../lib/k8s/event';
+import type { KubeObjectInterface } from '../lib/k8s/KubeObject';
+import { getSavedNamespaces, saveNamespaces } from '../lib/storage';
 
 export interface FilterState {
   /** The namespaces to filter on. */
   namespaces: Set<string>;
-  /** The search string to filter on. */
-  search: string;
 }
 
 export const initialState: FilterState = {
-  namespaces: new Set(),
-  search: '',
+  namespaces: new Set(getSavedNamespaces()),
 };
 
 /**
@@ -27,6 +44,7 @@ export const initialState: FilterState = {
 export function filterResource(
   item: KubeObjectInterface | KubeEvent,
   filter: FilterState,
+  search?: string,
   matchCriteria?: string[]
 ) {
   let matches: boolean = true;
@@ -39,14 +57,16 @@ export function filterResource(
     return false;
   }
 
-  if (filter.search) {
-    const filterString = filter.search.toLowerCase();
+  if (search) {
+    const filterString = search.toLowerCase();
     const usedMatchCriteria = [
-      item.metadata.uid.toLowerCase(),
+      item.metadata.uid?.toLowerCase() ?? '',
       item.metadata.namespace ? item.metadata.namespace.toLowerCase() : '',
-      item.metadata.name.toLowerCase(),
-      ...Object.keys(item.metadata.labels || {}).map(item => item.toLowerCase()),
-      ...Object.values(item.metadata.labels || {}).map(item => item.toLowerCase()),
+      item.metadata.name?.toLowerCase() ?? '',
+      ...Object.keys(item.metadata.labels || {}).map(key => String(key).toLowerCase()),
+      ...Object.values(item.metadata.labels || {})
+        .filter(val => val !== null && val !== undefined)
+        .map(val => String(val).toLowerCase()),
     ];
 
     matches = !!usedMatchCriteria.find(item => item.includes(filterString));
@@ -54,7 +74,7 @@ export function filterResource(
       return true;
     }
 
-    matches = filterGeneric(item, filter, matchCriteria);
+    matches = filterGeneric(item, search, matchCriteria);
   }
 
   return matches;
@@ -72,14 +92,14 @@ export function filterResource(
  */
 export function filterGeneric<T extends { [key: string]: any } = { [key: string]: any }>(
   item: T,
-  filter: FilterState,
+  search?: string,
   matchCriteria?: string[]
 ) {
-  if (!filter.search) {
+  if (!search) {
     return true;
   }
 
-  const filterString = filter.search.toLowerCase();
+  const filterString = search.toLowerCase();
   const usedMatchCriteria: string[] = [];
 
   // Use the custom matchCriteria if any
@@ -122,24 +142,35 @@ const filterSlice = createSlice({
      * Sets the namespace filter with an array of strings.
      */
     setNamespaceFilter(state, action: PayloadAction<string[]>) {
-      state.namespaces = new Set(action.payload);
-    },
-    /**
-     * Sets the search filter with a string.
-     */
-    setSearchFilter(state, action: PayloadAction<string>) {
-      state.search = action.payload;
+      const namespaces = action.payload
+        .map(ns => (typeof ns === 'string' ? ns.trim() : ''))
+        .filter(Boolean);
+
+      const namespacesSet = new Set(namespaces);
+      state.namespaces = namespacesSet;
+
+      saveNamespaces([...namespacesSet]);
     },
     /**
      * Resets the filter state.
      */
     resetFilter(state) {
       state.namespaces = new Set();
-      state.search = '';
+      saveNamespaces([]);
     },
   },
 });
 
-export const { setNamespaceFilter, setSearchFilter, resetFilter } = filterSlice.actions;
+export const { setNamespaceFilter, resetFilter } = filterSlice.actions;
 
 export default filterSlice.reducer;
+
+/**
+ * Get globally selected namespaces
+ *
+ * @returns An array of selected namespaces, empty means all namespaces are visible
+ */
+export const useNamespaces = () => {
+  const namespacesSet = useSelector(({ filter }: { filter: FilterState }) => filter.namespaces);
+  return useMemo(() => [...namespacesSet], [namespacesSet]);
+};

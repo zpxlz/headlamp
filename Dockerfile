@@ -1,20 +1,21 @@
 # syntax=docker/dockerfile:1
-# Final container image
-ARG IMAGE_BASE=alpine:3.18
-FROM ${IMAGE_BASE} as image-base
+# Final container image. Override it with --build-arg IMAGE_BASE=<image>. The
+# default is on its own FROM line so that Dependabot can update it.
+ARG IMAGE_BASE=default-image-base
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS default-image-base
+FROM ${IMAGE_BASE} AS image-base
 
-FROM --platform=${BUILDPLATFORM} golang:1.22 as backend-build
-
+FROM --platform=${BUILDPLATFORM} golang:1.26.10@sha256:670bb5aa5349ae03b8516764718486f4f16399134bdc9acd0c46a23f043ab05c AS backend-build
 WORKDIR /headlamp
 
 ARG TARGETOS
 ARG TARGETARCH
 ENV GOPATH=/go \
     GOPROXY=https://proxy.golang.org \
-	GO111MODULE=on\
-	CGO_ENABLED=0\ 
-	GOOS=${TARGETOS}\
-	GOARCH=${TARGETARCH}
+    GO111MODULE=on\
+    CGO_ENABLED=0\ 
+    GOOS=${TARGETOS}\
+    GOARCH=${TARGETARCH}
 
 # Keep go mod download separated so source changes don't trigger install
 COPY ./backend/go.* /headlamp/backend/
@@ -27,26 +28,26 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     cd ./backend && go build -o ./headlamp-server ./cmd/
 
-FROM --platform=${BUILDPLATFORM} node:18 as frontend-build
-
-# We need .git and app/ in order to get the version and git version for the frontend/.env file
-# that's generated when building the frontend.
-COPY .git/ ./headlamp/.git/
-
-COPY app/package.json /headlamp/app/package.json
+FROM --platform=${BUILDPLATFORM} node:22@sha256:18a6d90fd60542269850c80ca03b29b1d9b14d6b221ac7ee8e35b0d33ef904bd AS frontend-build
 
 # Keep npm install separated so source changes don't trigger install
 COPY frontend/package*.json /headlamp/frontend/
-COPY frontend/patches/* /headlamp/frontend/patches/
 WORKDIR /headlamp
-RUN cd ./frontend && npm install --only=prod
+RUN cd ./frontend && npm ci --only=prod
 
-FROM frontend-build as frontend
+FROM frontend-build AS frontend
+ARG HEADLAMP_SOURCE_COMMIT
+ARG HEADLAMP_BUILD_MANIFEST
+ENV HEADLAMP_SOURCE_COMMIT=${HEADLAMP_SOURCE_COMMIT} \
+    HEADLAMP_BUILD_MANIFEST=${HEADLAMP_BUILD_MANIFEST}
+
 COPY ./frontend /headlamp/frontend
 
 WORKDIR /headlamp
 
-RUN cd ./frontend && npm run build
+# Expose app metadata and manifests only while generating the frontend build.
+RUN --mount=type=bind,source=app,target=/headlamp/app,ro \
+    cd ./frontend && npm run build
 
 RUN echo "*** Built Headlamp with version: ***"
 RUN cat ./frontend/.env
@@ -65,7 +66,7 @@ RUN for i in $(find ./plugins-old/*/main.js); do plugin_name=$(echo $i|cut -d'/'
 RUN for i in $(find ./plugins-old/*/package.json); do plugin_name=$(echo $i|cut -d'/' -f3); mkdir -p plugins/$plugin_name; cp $i plugins/$plugin_name; done
 
 # Static (officially shipped) plugins
-FROM --platform=${BUILDPLATFORM} frontend-build as static-plugins
+FROM --platform=${BUILDPLATFORM} frontend-build AS static-plugins
 RUN apt-get update && apt-get install -y jq
 COPY ./container/build-manifest.json ./container/fetch-plugins.sh /tools/
 
@@ -73,16 +74,18 @@ WORKDIR /tools
 RUN mkdir -p /plugins
 RUN ./fetch-plugins.sh /plugins/
 
-FROM image-base as final
+FROM image-base AS final
 
+# Create the non-root user
 RUN if command -v apt-get > /dev/null; then \
-        apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        && addgroup --system headlamp \
-        && adduser --system --ingroup headlamp headlamp \
-        && rm -rf /var/lib/apt/lists/*; \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && addgroup --system headlamp \
+    && adduser --system --ingroup headlamp headlamp \
+    && rm -rf /var/lib/apt/lists/*; \
     else \
-        addgroup -S headlamp && adduser -S headlamp -G headlamp; \
+    addgroup -S headlamp \
+    && adduser -S headlamp -G headlamp; \
     fi
 
 COPY --from=backend-build --link /headlamp/backend/headlamp-server /headlamp/headlamp-server

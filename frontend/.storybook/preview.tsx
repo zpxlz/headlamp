@@ -1,94 +1,112 @@
-import React from 'react';
-import themesConf from '../src/lib/themes';
-import { ThemeProvider, Theme, StyledEngineProvider } from '@mui/material/styles';
-import StylesProvider from '@mui/styles/StylesProvider';
-import { initialize, mswDecorator } from 'msw-storybook-addon';
-import { rest } from 'msw'
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-declare module '@mui/styles/defaultTheme' {
-  // eslint-disable-next-line @typescript-eslint/no-empty-interface
-  interface DefaultTheme extends Theme {}
-}
+import { ThemeProvider } from '@mui/material/styles';
+import { initialize, mswLoader } from 'msw-storybook-addon';
+import '../src/index.css';
+import { Title, Subtitle, Description, Primary, Controls } from '@storybook/addon-docs/blocks';
+import { baseMocks, fallbackMocks } from './baseMocks';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { darkTheme, lightTheme } from '../src/components/App/defaultAppThemes';
+import { createMuiTheme } from '../src/lib/themes';
+import App from '../src/App';
+
+// Please also update: plugins/headlamp-plugin/config/.storybook/preview.tsx
 
 // https://github.com/mswjs/msw-storybook-addon
-initialize();
+initialize({
+  onUnhandledRequest: 'warn',
+  waitUntilReady: true,
+});
 
-const darkTheme = themesConf['dark'];
-const lightTheme = themesConf['light'];
+// App import will load the whole app dependency tree
+// And assigning it to a value will make sure it's not tree-shaken and removed
+const DontDeleteMe = App;
 
-const withThemeProvider = (Story, context) => {
-  const backgroundColor = context.globals.backgrounds
-    ? context.globals.backgrounds.value
-    : 'light';
-  const theme = backgroundColor !== 'dark' ? lightTheme : darkTheme;
-
-  const ourThemeProvider = (
-    <StyledEngineProvider injectFirst>
-      <ThemeProvider theme={theme}>
-        <Story {...context} />
-      </ThemeProvider>
-    </StyledEngineProvider>
-  );
-  if (process.env.NODE_ENV !== 'test') {
-    return ourThemeProvider;
-  } else {
-    const generateClassName = (rule, styleSheet) =>
-      `${styleSheet?.options.classNamePrefix}-${rule.key}`;
-
-    return (
-      <StylesProvider generateClassName={generateClassName}>
-        {ourThemeProvider}
-      </StylesProvider>
-    )
-  }
-};
-export const decorators = [withThemeProvider, mswDecorator];
-
-export const globalTypes = {
-  theme: {
-    name: 'Theme',
-    description: 'Global theme for components',
-    defaultValue: 'light',
-    toolbar: {
-      icon: 'circlehollow',
-      items: ['light', 'dark'],
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnMount: 'always',
+      staleTime: 0,
+      retry: false,
+      gcTime: 0,
     },
   },
+});
+
+const withThemeProvider = (Story: any, context: any) => {
+  const theme = context.globals.backgrounds?.value === '#1f1f1f' ? darkTheme : lightTheme;
+
+  const ourThemeProvider = (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider theme={createMuiTheme(theme)}>
+        <Story {...context} />
+      </ThemeProvider>
+    </QueryClientProvider>
+  );
+  return ourThemeProvider;
 };
+export const decorators = [withThemeProvider];
 
 export const parameters = {
   backgrounds: {
     values: [
-      { name: 'light', value: 'light' },
-      { name: 'dark', value: 'dark' },
+      { name: 'light', value: '#FFF' },
+      { name: 'dark', value: '#1f1f1f' },
     ],
   },
-  actions: { argTypesRegex: '^on[A-Z].*' },
+
+  docs: {
+    toc: { disable: true },
+    // Customize docs page to exclude display of all stories
+    // Becasue it would cause stories override each others' mocks
+    page: () => (
+      <>
+        <Title />
+        <Subtitle />
+        <Description />
+        <Primary />
+        <Controls />
+      </>
+    ),
+  },
 
   // https://github.com/mswjs/msw-storybook-addon#composing-request-handlers
   msw: {
-    handlers: [
-      rest.get('https://api.iconify.design/mdi.json', (_req, res, ctx) => {
-        return res(ctx.json({}));
-      }),
-      rest.get('http://localhost/api/v1/namespaces', (_req, res, ctx) => {
-        return res(ctx.json({}));
-      }),
-      rest.get('http://localhost/api/v1/events', (_req, res, ctx) => {
-        return res(ctx.json({}));
-      }),
-      rest.post('http://localhost/apis/authorization.k8s.io/v1/selfsubjectaccessreviews', (_req, res, ctx) => {
-        return res(ctx.json({status: 200}));
-      }),
-      rest.get('http://localhost:4466/api/v1/namespaces', (_req, res, ctx) => {
-        return res(ctx.json({}));
-      }),
-      rest.get('http://localhost:4466/api/v1/events', (_req, res, ctx) => {
-        return res(ctx.json({}));
-      }),
-      rest.post('http://localhost:4466/apis/authorization.k8s.io/v1/selfsubjectaccessreviews', (_req, res, ctx) => {
-        return res(ctx.json({status: 200}));
-      }),
-    ]
+    handlers: {
+      /**
+       * If you wan't to override or disable them in a particular story
+       * set base to null in msw configuration
+       *
+       * parameters: {
+       *   msw: {
+       *     handlers: {
+       *       base: null,
+       *       story: [yourMocks]
+       *     }
+       *   }
+       * }
+       */
+      base: baseMocks,
+      story: [],
+      fallback: fallbackMocks,
+    },
   },
 };
+
+export const loaders = [mswLoader];
+
+export const tags = ['autodocs'];

@@ -1,8 +1,6 @@
----
-title: "Module: plugin/registry"
-linkTitle: "plugin/registry"
-slug: "plugin_registry"
----
+[API](../API.md) / plugin/registry
+
+# Module: plugin/registry
 
 ## Enumerations
 
@@ -12,11 +10,13 @@ slug: "plugin_registry"
 
 ## Classes
 
+- [PluginManager](../classes/plugin_registry.PluginManager.md)
 - [Registry](../classes/plugin_registry.Registry.md)
 
 ## Interfaces
 
 - [AppLogoProps](../interfaces/plugin_registry.AppLogoProps.md)
+- [AppThemeRegistrationOptions](../interfaces/plugin_registry.AppThemeRegistrationOptions.md)
 - [ClusterChooserProps](../interfaces/plugin_registry.ClusterChooserProps.md)
 - [CreateResourceEvent](../interfaces/plugin_registry.CreateResourceEvent.md)
 - [DeleteResourceEvent](../interfaces/plugin_registry.DeleteResourceEvent.md)
@@ -60,7 +60,7 @@ slug: "plugin_registry"
 
 #### Defined in
 
-[redux/actionButtonsSlice.ts:59](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/redux/actionButtonsSlice.ts#L59)
+[redux/actionButtonsSlice.ts:59](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/redux/actionButtonsSlice.ts#L59)
 
 ___
 
@@ -70,7 +70,7 @@ ___
 
 #### Defined in
 
-[components/App/AppLogo.tsx:25](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/components/App/AppLogo.tsx#L25)
+[components/App/AppLogo.tsx:25](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/components/App/AppLogo.tsx#L25)
 
 ___
 
@@ -80,7 +80,7 @@ ___
 
 #### Defined in
 
-[components/cluster/ClusterChooser.tsx:10](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/components/cluster/ClusterChooser.tsx#L10)
+[components/cluster/ClusterChooser.tsx:10](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/components/cluster/ClusterChooser.tsx#L10)
 
 ___
 
@@ -90,7 +90,7 @@ ___
 
 #### Defined in
 
-[plugin/registry.tsx:114](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L114)
+[plugin/registry.tsx:115](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L115)
 
 ___
 
@@ -100,7 +100,7 @@ ___
 
 #### Defined in
 
-[plugin/registry.tsx:115](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L115)
+[plugin/registry.tsx:116](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L116)
 
 ___
 
@@ -110,7 +110,7 @@ ___
 
 #### Defined in
 
-[components/DetailsViewSection/DetailsViewSection.tsx:10](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/components/DetailsViewSection/DetailsViewSection.tsx#L10)
+[components/DetailsViewSection/DetailsViewSection.tsx:10](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/components/DetailsViewSection/DetailsViewSection.tsx#L10)
 
 ___
 
@@ -134,7 +134,19 @@ ___
 
 #### Defined in
 
-[redux/headlampEventSlice.ts:278](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/redux/headlampEventSlice.ts#L278)
+[redux/headlampEventSlice.ts:278](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/redux/headlampEventSlice.ts#L278)
+
+___
+
+### PluginRunCommand
+
+Ƭ **PluginRunCommand**: (`command`: `string`, `args`: `string`[], `options`: `Record`<`string`, `never`>) => `ReturnType`<typeof `runCommand`\>
+
+Command-running function made available to a plugin authorized by the product manifest.
+
+#### Defined in
+
+[components/App/runCommand.ts](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/components/App/runCommand.ts)
 
 ___
 
@@ -146,7 +158,7 @@ PluginSettingsComponentType is the type of the component associated with the plu
 
 #### Defined in
 
-[plugin/pluginsSlice.ts:24](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/pluginsSlice.ts#L24)
+[plugin/pluginsSlice.ts:24](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/pluginsSlice.ts#L24)
 
 ___
 
@@ -172,9 +184,28 @@ ___
 
 #### Defined in
 
-[plugin/registry.tsx:106](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L106)
+[plugin/registry.tsx:107](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L107)
 
 ## Variables
+
+### DefaultCreateProject
+
+• `Const` **DefaultCreateProject**: `Object`
+
+IDs plugins can register to replace Headlamp's built-in project creation options.
+
+#### Type declaration
+
+| Name | Type | Description |
+| :------ | :------ | :------ |
+| `FROM_YAML` | ``"headlamp.projects.from-yaml"`` | Replace the built-in YAML project creation flow. |
+| `NEW_PROJECT` | ``"headlamp.projects.new-project"`` | Replace the built-in project form that uses existing or new namespaces. |
+
+#### Defined in
+
+[redux/projectsSlice.ts:32](https://github.com/kubernetes-sigs/headlamp/blob/main/frontend/src/redux/projectsSlice.ts#L32)
+
+___
 
 ### DefaultHeadlampEvents
 
@@ -182,7 +213,7 @@ ___
 
 #### Defined in
 
-[plugin/registry.tsx:100](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L100)
+[plugin/registry.tsx:101](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L101)
 
 ___
 
@@ -192,7 +223,7 @@ ___
 
 #### Defined in
 
-[plugin/registry.tsx:101](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L101)
+[plugin/registry.tsx:102](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L102)
 
 ## Functions
 
@@ -208,7 +239,7 @@ Returns headers for making API calls to the headlamp-server backend.
 
 #### Defined in
 
-[helpers/index.ts:368](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/helpers/index.ts#L368)
+[helpers/index.ts:369](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/helpers/index.ts#L369)
 
 ___
 
@@ -251,7 +282,7 @@ registerAppBarAction(ConsoleLogger);
 
 #### Defined in
 
-[plugin/registry.tsx:446](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L446)
+[plugin/registry.tsx:450](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L450)
 
 ___
 
@@ -271,7 +302,7 @@ registerAppLogo(<p>my logo</p>)
 
 More complete logo example in plugins/examples/change-logo:
 
-**`see`** [Change Logo Example](http://github.com/kinvolk/headlamp/plugins/examples/change-logo/)
+**`see`** [Change Logo Example](https://github.com/kubernetes-sigs/headlamp/tree/main/plugins/examples/change-logo)
 
 #### Parameters
 
@@ -285,7 +316,45 @@ More complete logo example in plugins/examples/change-logo:
 
 #### Defined in
 
-[plugin/registry.tsx:546](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L546)
+[plugin/registry.tsx:550](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L550)
+
+___
+
+### registerAppTheme
+
+▸ **registerAppTheme**(`theme`, `options?`): `void`
+
+Add a new theme that will be available in the settings.
+Theme names should be unique.
+
+**`example`**
+
+```ts
+registerAppTheme(
+  {
+    name: 'My Custom Theme',
+    base: 'light',
+    primary: '#ff0000',
+    secondary: '#333333',
+  },
+  { default: true }
+);
+```
+
+#### Parameters
+
+| Name | Type | Default value | Description |
+| :------ | :------ | :------ | :------ |
+| `theme` | `AppTheme` | `undefined` | App theme definition. |
+| `options` | [`AppThemeRegistrationOptions`](../interfaces/plugin_registry.AppThemeRegistrationOptions.md) | `{}` | Options that control whether the theme is selected during registration. |
+
+#### Returns
+
+`void`
+
+#### Defined in
+
+[plugin/registry.tsx:1098](https://github.com/kubernetes-sigs/headlamp/blob/9a1cd9722/frontend/src/plugin/registry.tsx#L1098)
 
 ___
 
@@ -305,7 +374,7 @@ registerClusterChooser(({ clickHandler, cluster }: ClusterChooserProps) => {
 })
 ```
 
-**`see`** [Cluster Chooser example](http://github.com/kinvolk/headlamp/plugins/examples/cluster-chooser/)
+**`see`** [Cluster Chooser example](https://github.com/kubernetes-sigs/headlamp/tree/main/plugins/examples/cluster-chooser)
 
 #### Parameters
 
@@ -319,7 +388,89 @@ registerClusterChooser(({ clickHandler, cluster }: ClusterChooserProps) => {
 
 #### Defined in
 
-[plugin/registry.tsx:569](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L569)
+[plugin/registry.tsx:573](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L573)
+
+___
+
+### registerClusterEmptyState
+
+▸ **registerClusterEmptyState**(`component`): `void`
+
+Replace the empty state shown on the Home page when no clusters are configured.
+
+The component receives Headlamp's default content so a product can wrap it.
+Registering another component replaces the previous registration.
+
+**`example`**
+
+```tsx
+import { registerClusterEmptyState } from '@kinvolk/headlamp-plugin/lib';
+
+registerClusterEmptyState(({ defaultContent }) => (
+  <section>
+    <p>Choose how to connect your first cluster.</p>
+    {defaultContent}
+  </section>
+));
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| :------ | :------ | :------ |
+| `component` | `ClusterEmptyStateComponent` | Product-owned empty state component. |
+
+#### Returns
+
+`void`
+
+#### Defined in
+
+[plugin/registry.tsx:972](https://github.com/kubernetes-sigs/headlamp/blob/558672b5a/frontend/src/plugin/registry.tsx#L972)
+
+___
+
+### registerCustomCreateProject
+
+▸ **registerCustomCreateProject**(`customCreateProject`): `void`
+
+Register a new way to create Headlamp 'Projects'.
+
+**`example`**
+
+```tsx
+import {
+  DefaultCreateProject,
+  registerCustomCreateProject,
+} from '@kinvolk/headlamp-plugin/lib';
+
+registerCustomCreateProject({
+  id: DefaultCreateProject.NEW_PROJECT,
+  name: 'Create Managed Project',
+  description: 'Create a project managed by the platform',
+  icon: 'mdi:folder-plus',
+  component: ({ onBack }) => (
+    <div>
+      Create project
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+});
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| :------ | :------ | :------ |
+| `customCreateProject` | `CustomCreateProject` | Definition for custom creator |
+
+#### Returns
+
+`void`
+
+#### Defined in
+
+[plugin/registry.tsx:1167](https://github.com/kubernetes-sigs/headlamp/blob/main/frontend/src/plugin/registry.tsx#L1167)
 
 ___
 
@@ -360,7 +511,7 @@ registerDetailsViewHeaderAction(IconAction);
 
 #### Defined in
 
-[plugin/registry.tsx:350](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L350)
+[plugin/registry.tsx:351](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L351)
 
 ___
 
@@ -381,7 +532,7 @@ registerDetailsViewHeaderActionsProcessor((resource, headerActions) => {
 });
 
 More complete detail view example in plugins/examples/details-view:
-@see [Detail View Example](http://github.com/kinvolk/headlamp/plugins/examples/details-view/)
+@see [Detail View Example](https://github.com/kubernetes-sigs/headlamp/tree/main/plugins/examples/details-view)
 
 #### Parameters
 
@@ -395,7 +546,7 @@ More complete detail view example in plugins/examples/details-view:
 
 #### Defined in
 
-[plugin/registry.tsx:373](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L373)
+[plugin/registry.tsx:374](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L374)
 
 ___
 
@@ -437,7 +588,7 @@ registerDetailsViewSection(({ resource }: DetailsViewSectionProps) => {
 
 #### Defined in
 
-[plugin/registry.tsx:480](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L480)
+[plugin/registry.tsx:484](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L484)
 
 ___
 
@@ -488,7 +639,7 @@ registerDetailsViewSectionsProcessor(function addTopSection( resource, sections 
 
 #### Defined in
 
-[plugin/registry.tsx:518](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L518)
+[plugin/registry.tsx:522](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L522)
 
 ___
 
@@ -518,7 +669,7 @@ registerGetTokenFunction(() => {
 
 #### Defined in
 
-[plugin/registry.tsx:603](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L603)
+[plugin/registry.tsx:607](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L607)
 
 ___
 
@@ -558,7 +709,37 @@ registerHeadlampEventCallback((event: HeadlampEvent) => {
 
 #### Defined in
 
-[plugin/registry.tsx:629](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L629)
+[plugin/registry.tsx:633](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L633)
+
+___
+
+### registerHomeSidebarEntryFilter
+
+▸ **registerHomeSidebarEntryFilter**(`filterFunc`): `void`
+
+Filter HOME sidebar menu items (return null to remove, or return a modified entry to update it).
+
+**`example`**
+
+```tsx
+import { registerHomeSidebarEntryFilter } from '@kinvolk/headlamp-plugin/lib';
+
+registerHomeSidebarEntryFilter(entry => (entry.name === 'settings' ? null : entry));
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| :------ | :------ | :------ |
+| `filterFunc` | (`entry`: [`SidebarEntryProps`](../interfaces/plugin_registry.SidebarEntryProps.md)) => ``null`` \| [`SidebarEntryProps`](../interfaces/plugin_registry.SidebarEntryProps.md) | a function for filtering HOME sidebar entries. |
+
+#### Returns
+
+`void`
+
+#### Defined in
+
+[plugin/registry.tsx:395](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L395)
 
 ___
 
@@ -601,7 +782,7 @@ registerPluginSettings('my-plugin', MyPluginSettingsComponent, displaySaveButton
 
 More complete plugin settings example in plugins/examples/change-logo:
 
-**`see`** [Change Logo Example](https://github.com/headlamp-k8s/headlamp/tree/main/plugins/examples/change-logo)
+**`see`** [Change Logo Example](https://github.com/kubernetes-sigs/headlamp/tree/main/plugins/examples/change-logo)
 
 #### Parameters
 
@@ -619,7 +800,43 @@ void
 
 #### Defined in
 
-[plugin/registry.tsx:675](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L675)
+[plugin/registry.tsx:679](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L679)
+
+___
+
+### registerProjectGrouping
+
+▸ **registerProjectGrouping**(`projectGrouping`): `void`
+
+Register custom grouping for project namespaces.
+
+The returned key is opaque and only distinguishes entries that share a project ID.
+Return the project ID to retain Headlamp's default cross-cluster grouping.
+
+**`example`**
+
+```tsx
+registerProjectGrouping({
+  getProjectKey: ({ namespace, projectId }) =>
+    namespace.metadata.labels?.['example.com/separate-by-cluster'] === 'true'
+      ? `${projectId}:${namespace.cluster}`
+      : projectId,
+});
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| :------ | :------ | :------ |
+| `projectGrouping` | `ProjectGrouping` | Project grouping definition |
+
+#### Returns
+
+`void`
+
+#### Defined in
+
+[plugin/registry.tsx:1139](https://github.com/kubernetes-sigs/headlamp/blob/85131ccb0/frontend/src/plugin/registry.tsx#L1139)
 
 ___
 
@@ -639,9 +856,12 @@ registerResourceTableColumnsProcessor(function ageRemover({ id, columns }) {
   if (id === 'headlamp-pods') {
     columns.push({
       label: 'Init Containers',
-      getter: (pod: Pod) => {
+      // return plain value to allow filtering and sorting
+      getValue: (pod: Pod) => {
         return pod.spec.initContainers.length;
-      },
+      }
+      // (optional) customise how the cell value is rendered
+      render: (pod: Pod) => <div style={{ color: "red" }}>{pod.spec.initContainers.length}</div>
     });
   }
 
@@ -653,7 +873,7 @@ registerResourceTableColumnsProcessor(function ageRemover({ id, columns }) {
 
 | Name | Type | Description |
 | :------ | :------ | :------ |
-| `processor` | `TableColumnsProcessor` \| (`args`: { `columns`: (`ResourceTableColumn` \| `ColumnType`)[] ; `id`: `string`  }) => (`ResourceTableColumn` \| `ColumnType`)[] | The processor ID and function. See #TableColumnsProcessor. |
+| `processor` | `TableColumnsProcessor` \| <T\>(`args`: { `columns`: (`ColumnType` \| `ResourceTableColumn`<`T`\>)[] ; `id`: `string`  }) => (`ColumnType` \| `ResourceTableColumn`<`T`\>)[] | The processor ID and function. See #TableColumnsProcessor. |
 
 #### Returns
 
@@ -661,7 +881,7 @@ registerResourceTableColumnsProcessor(function ageRemover({ id, columns }) {
 
 #### Defined in
 
-[plugin/registry.tsx:404](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L404)
+[plugin/registry.tsx:408](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L408)
 
 ___
 
@@ -687,7 +907,7 @@ registerRoute({
 
 **`see`** [Route examples](https://github.com/kinvolk/headlamp/blob/main/frontend/src/lib/router.tsx)
 
-**`see`** [Sidebar Example](http://github.com/kinvolk/headlamp/plugins/examples/sidebar/)
+**`see`** [Sidebar Example](https://github.com/kubernetes-sigs/headlamp/tree/main/plugins/examples/sidebar)
 
 #### Parameters
 
@@ -701,7 +921,7 @@ registerRoute({
 
 #### Defined in
 
-[plugin/registry.tsx:322](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L322)
+[plugin/registry.tsx:323](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L323)
 
 ___
 
@@ -731,7 +951,7 @@ registerRouteFilter(route => (route.path === '/workloads' ? null : route));
 
 #### Defined in
 
-[plugin/registry.tsx:295](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L295)
+[plugin/registry.tsx:296](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L296)
 
 ___
 
@@ -761,7 +981,7 @@ registerSetTokenFunction((cluster: string, token: string | null) => {
 
 #### Defined in
 
-[plugin/registry.tsx:585](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L585)
+[plugin/registry.tsx:589](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L589)
 
 ___
 
@@ -779,7 +999,7 @@ registerSidebarEntry({ parent: 'cluster', name: 'traces', label: 'Traces', url: 
 
 ```
 
-**`see`** [Sidebar Example](http://github.com/kinvolk/headlamp/plugins/examples/sidebar/)
+**`see`** [Sidebar Example](https://github.com/kubernetes-sigs/headlamp/tree/main/plugins/examples/sidebar)
 
 #### Parameters
 
@@ -793,7 +1013,7 @@ registerSidebarEntry({ parent: 'cluster', name: 'traces', label: 'Traces', url: 
 
 #### Defined in
 
-[plugin/registry.tsx:241](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L241)
+[plugin/registry.tsx:242](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L242)
 
 ___
 
@@ -801,7 +1021,7 @@ ___
 
 ▸ **registerSidebarEntryFilter**(`filterFunc`): `void`
 
-Remove sidebar menu items.
+Filter IN_CLUSTER sidebar menu items (return null to remove, or return a modified entry to update it).
 
 **`example`**
 
@@ -815,7 +1035,7 @@ registerSidebarEntryFilter(entry => (entry.name === 'workloads' ? null : entry))
 
 | Name | Type | Description |
 | :------ | :------ | :------ |
-| `filterFunc` | (`entry`: [`SidebarEntryProps`](../interfaces/plugin_registry.SidebarEntryProps.md)) => ``null`` \| [`SidebarEntryProps`](../interfaces/plugin_registry.SidebarEntryProps.md) | a function for filtering sidebar entries. |
+| `filterFunc` | (`entry`: [`SidebarEntryProps`](../interfaces/plugin_registry.SidebarEntryProps.md)) => ``null`` \| [`SidebarEntryProps`](../interfaces/plugin_registry.SidebarEntryProps.md) | a function for filtering IN_CLUSTER sidebar entries. |
 
 #### Returns
 
@@ -823,7 +1043,7 @@ registerSidebarEntryFilter(entry => (entry.name === 'workloads' ? null : entry))
 
 #### Defined in
 
-[plugin/registry.tsx:276](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/plugin/registry.tsx#L276)
+[plugin/registry.tsx:376](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/plugin/registry.tsx#L376)
 
 ___
 
@@ -842,7 +1062,10 @@ This function uses the desktopApi.send and desktopApi.receive methods to communi
 **`example`**
 
 ```ts
-  const minikube = runCommand('minikube', ['status']);
+  import type { PluginRunCommand } from '@kinvolk/headlamp-plugin/lib';
+  declare const pluginRunCommand: PluginRunCommand;
+  const minikube = pluginRunCommand('minikube', ['status'], {});
+
   minikube.stdout.on('data', (data) => {
     console.log('stdout:', data);
   });
@@ -858,7 +1081,7 @@ This function uses the desktopApi.send and desktopApi.receive methods to communi
 
 | Name | Type | Description |
 | :------ | :------ | :------ |
-| `command` | ``"minikube"`` \| ``"az"`` | The command to run. |
+| `command` | `string` | The command to run. |
 | `args` | `string`[] | An array of arguments to pass to the command. |
 | `options` | `Object` | - |
 
@@ -878,4 +1101,4 @@ An object with `stdout`, `stderr`, and `on` properties. You can listen for 'data
 
 #### Defined in
 
-[components/App/runCommand.ts:27](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/components/App/runCommand.ts#L27)
+[components/App/runCommand.ts:27](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/components/App/runCommand.ts#L27)

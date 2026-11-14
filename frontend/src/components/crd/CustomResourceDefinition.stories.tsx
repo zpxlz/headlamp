@@ -1,37 +1,78 @@
-import { Meta, Story } from '@storybook/react';
-import { KubeObjectClass } from '../../lib/k8s/cluster';
-import CustomResourceDefinition from '../../lib/k8s/crd';
-import { overrideKubeObject, TestContext, TestContextProps } from '../../test';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { baseMocks } from '../../../.storybook/baseMocks';
+import { API_BASE, TestContext, TestContextProps } from '../../test';
 import CustomResourceDefinitionDetails from './Details';
 import CustomResourceDefinitionList from './List';
-import { CRDMockMethods } from './storyHelper';
+import { mockCRD, mockCRList } from './storyHelper';
 
 interface MockerStory {
   viewType: 'list' | 'details';
   name?: string;
   namespace?: string;
-  useGet?: KubeObjectClass['useGet'];
-  useList?: KubeObjectClass['useList'];
-  useApiGet?: KubeObjectClass['useApiGet'];
-  useApiList?: KubeObjectClass['useApiList'];
 }
 
 export default {
   title: 'crd/CustomResourceDefinition',
   argTypes: {},
   decorators: [Story => <Story />],
+  parameters: {
+    msw: {
+      handlers: {
+        base: null,
+        storyBase: [
+          http.get(
+            `${API_BASE}/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions`,
+            () => new HttpResponse(null, { status: 404 })
+          ),
+          http.get(
+            `${API_BASE}/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions/mydefinition.phonyresources.io`,
+            () => HttpResponse.error()
+          ),
+          http.get(`${API_BASE}/apis/apiextensions.k8s.io/v1/customresourcedefinitions`, () =>
+            HttpResponse.json({
+              kind: 'List',
+              metadata: {},
+              items: [mockCRD],
+            })
+          ),
+          http.get(
+            `${API_BASE}/apis/apiextensions.k8s.io/v1/customresourcedefinitions/mydefinition.phonyresources.io`,
+            () => HttpResponse.json(mockCRD)
+          ),
+          http.get(`${API_BASE}/apis/my.phonyresources.io/v1/mycustomresources`, () =>
+            HttpResponse.json({
+              kind: 'List',
+              metadata: {},
+              items: mockCRList,
+            })
+          ),
+          ...baseMocks,
+        ],
+      },
+    },
+  },
 } as Meta;
 
-const Template: Story<MockerStory> = args => {
-  const { useGet, useList, useApiGet, useApiList, name, namespace, viewType = 'list' } = args;
+const Template: StoryFn<MockerStory> = args => {
+  const { name, namespace, viewType = 'list' } = args;
   const routerMap: TestContextProps['routerMap'] = {};
-
-  overrideKubeObject(CustomResourceDefinition, {
-    useApiGet,
-    useApiList,
-    useGet,
-    useList,
-  });
 
   if (!!name) {
     routerMap['name'] = name;
@@ -48,13 +89,10 @@ const Template: Story<MockerStory> = args => {
 };
 
 export const List = Template.bind({});
-List.args = {
-  useList: CRDMockMethods.usePhonyList,
-};
+List.args = {};
 
 export const Details = Template.bind({});
 Details.args = {
-  useApiGet: CRDMockMethods.usePhonyApiGet,
   viewType: 'details',
   name: 'mydefinition.phonyresources.io',
 };

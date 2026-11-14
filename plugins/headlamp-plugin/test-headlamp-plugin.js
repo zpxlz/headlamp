@@ -1,4 +1,21 @@
-#!/bin/env node
+#!/usr/bin/env node
+
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 const USAGE = `
 This tests unpublished @kinvolk/headlamp-plugin package in repo.
 
@@ -12,71 +29,223 @@ function testHeadlampPlugin() {
   // remove some temporary files.
   cleanup();
 
+  checkTemplateLockHasNoPluginIntegrity();
+
   // Make a package file of headlamp-plugin we can test
-  run('npm install');
-  run('npm run build');
-  run('npm pack');
+  run('npm', ['install']);
+  run('npm', ['run', 'test:typescript']);
+  run('npm', ['run', 'test:storybook-mocks']);
+  run('npm', ['run', 'test:upgrade']);
+  run('npm', ['run', 'build']);
+  checkFileContains(join('lib', 'index.js'), 'DefaultCreateProject');
+  checkFileContains(join('lib', 'index.d.ts'), 'DefaultCreateProject');
+
+  // test that example and official plugins are bundled after build
+  console.log('Testing that example and official plugins are bundled...');
+  checkFileExists('examples');
+  checkFileExists('official-plugins');
+
+  // Check that example plugins are present
+  const examplePlugins = ['pod-counter', 'sidebar', 'change-logo', 'custom-theme'];
+  examplePlugins.forEach(plugin => {
+    checkFileExists(join('examples', plugin));
+    checkFileExists(join('examples', plugin, 'package.json'));
+    checkFileExists(join('examples', plugin, 'src', 'index.tsx'));
+  });
+
+  // Check that official plugins are present
+  const officialPlugins = ['prometheus', 'opencost', 'cert-manager', 'keda'];
+  officialPlugins.forEach(plugin => {
+    checkFileExists(join('official-plugins', plugin));
+    checkFileExists(join('official-plugins', plugin, 'package.json'));
+  });
+
+  // Test that git hash skipping works by running the scripts again
+  console.log('Testing git hash skipping for bundle-examples.js...');
+  const bundleExamplesOutput = runAndCaptureOutput('node', ['scripts/bundle-examples.js']);
+  if (!bundleExamplesOutput.includes('are already up to date')) {
+    throw new Error('Expected bundle-examples.js to skip bundling (git hash should match)');
+  }
+  console.log('✓ bundle-examples.js correctly skipped bundling (hash matched)');
+
+  console.log('Testing git hash skipping for fetch-official-plugins.js...');
+  const fetchPluginsOutput = runAndCaptureOutput('node', ['scripts/fetch-official-plugins.js']);
+  if (!fetchPluginsOutput.includes('are already up to date')) {
+    throw new Error('Expected fetch-official-plugins.js to skip fetching (git hash should match)');
+  }
+  console.log('✓ fetch-official-plugins.js correctly skipped fetching (hash matched)');
+
+  run('npm', ['pack']);
 
   const packedFile = fs
     .readdirSync('.')
     .filter(file => file.match('kinvolk-headlamp-plugin-.*gz'))[0];
   console.log('Packed headlamp-plugin package file:', packedFile);
 
-  // Use "link" to test the repo version of the headlamp-plugin tool.
-  run('npm link');
-  run(`node bin/headlamp-plugin.js create ${PACKAGE_NAME} --link`);
+  // Install the packed candidate without first resolving its unpublished version from npm.
+  run('node', ['bin/headlamp-plugin.js', 'create', PACKAGE_NAME, '--noinstall']);
   curDir = join('.', PACKAGE_NAME);
-  run(`npm install ${join('..', packedFile)}`);
+  run('npm', ['install', join('..', packedFile)]);
+
+  // test AGENTS.md was created
+  checkFileExists(join(PACKAGE_NAME, 'AGENTS.md'));
 
   // test headlamp-plugin build
-  run(`node ${join('..', 'bin', 'headlamp-plugin.js')} build`);
+  run('node', [join('..', 'bin', 'headlamp-plugin.js'), 'build']);
   checkFileExists(join(PACKAGE_NAME, 'dist', 'main.js'));
+  // brotli sidecar must be present alongside main.js
+  checkFileExists(join(PACKAGE_NAME, 'dist', 'main.js.br'));
+  console.log('✓ brotli sidecar main.js.br created after build (package dir)');
 
   // test headlamp-plugin build folder
   curDir = '.';
   fs.rmSync(PACKAGE_NAME, { recursive: true });
-  run(`node bin/headlamp-plugin.js create ${PACKAGE_NAME} --link`);
+  run('node', ['bin/headlamp-plugin.js', 'create', PACKAGE_NAME, '--noinstall']);
   curDir = PACKAGE_NAME;
-  run(`npm install ${join('..', packedFile)}`);
+  run('npm', ['install', join('..', packedFile)]);
   curDir = '.';
-  run(`node bin/headlamp-plugin.js build ${PACKAGE_NAME}`);
+  run('node', ['bin/headlamp-plugin.js', 'build', PACKAGE_NAME]);
   checkFileExists(join(PACKAGE_NAME, 'dist', 'main.js'));
+  // brotli sidecar must also be present when building a named folder
+  checkFileExists(join(PACKAGE_NAME, 'dist', 'main.js.br'));
+  console.log('✓ brotli sidecar main.js.br created after build (folder arg)');
+
+  fs.writeFileSync(join(PACKAGE_NAME, 'dist', 'extra.txt'), 'All dist/ files will be copied.');
 
   // test extraction works
-  run(`node bin/headlamp-plugin.js extract . .plugins`);
+  run('node', ['bin/headlamp-plugin.js', 'extract', '.', '.plugins']);
   checkFileExists(join('.plugins', PACKAGE_NAME, 'main.js'));
   checkFileExists(join('.plugins', PACKAGE_NAME, 'package.json'));
+  // make sure extra files in dist/ folder are copied too
+  checkFileExists(join('.plugins', PACKAGE_NAME, 'extra.txt'));
+
+  // test packing works
+  const tmpDir = fs.mkdtempSync('headlamp-plugin-test-');
+  run('node', ['bin/headlamp-plugin.js', 'package', PACKAGE_NAME, tmpDir]);
+  checkFileExists(join(tmpDir, `${PACKAGE_NAME}-0.1.0.tar.gz`));
+  // extract archive and check files
+  const extractionFolder = join(tmpDir, 'dst');
+  fs.mkdirSync(extractionFolder, { recursive: true });
+  run('tar', ['-xzf', join(tmpDir, `${PACKAGE_NAME}-0.1.0.tar.gz`), '-C', extractionFolder]);
+  checkFileExists(join(extractionFolder, `${PACKAGE_NAME}`, 'main.js'));
+  checkFileExists(join(extractionFolder, `${PACKAGE_NAME}`, 'package.json'));
+  fs.rmSync(tmpDir, { recursive: true });
 
   // test format command and that default code is formatted correctly
   fs.rmSync(PACKAGE_NAME, { recursive: true });
-  run(`node bin/headlamp-plugin.js create ${PACKAGE_NAME} --link`);
+  run('node', ['bin/headlamp-plugin.js', 'create', PACKAGE_NAME, '--noinstall']);
   curDir = PACKAGE_NAME;
-  run(`npm install ${join('..', packedFile)}`);
-  run('npm run format');
+  run('npm', ['install', join('..', packedFile)]);
+  run('npm', ['run', 'format']);
 
   // test lint command and default code is lint free
-  run('npm run lint');
-  run('npm run lint-fix');
+  run('npm', ['run', 'lint']);
+  run('npm', ['run', 'lint-fix']);
+
+  // Regression test for #7036: plugin modules that import a *value* (not just
+  // a type) from `@kinvolk/headlamp-plugin/lib/[Kk]8s/*` must resolve at test
+  // time. The published tree has an extra `lib/` prefix (source at
+  // `src/lib/**` emits to `lib/lib/**`), so without a resolve alias in the
+  // plugin's vite config, vitest can't load the module and fails at
+  // transform time. The test imports from `lib/[Kk]8s/patchUtils`, a leaf
+  // module whose only runtime dependencies are external (`lodash`,
+  // `fast-json-patch`). Importing from a file that transitively loads the
+  // whole k8s class hierarchy surfaces an unrelated pre-existing
+  // class-extends ordering issue in the compiled plugin lib; using a leaf
+  // keeps the test scoped to what this PR actually fixes: resolvability.
+  const libImportTestPath = join(curDir, 'src', '__lib-import.test.ts');
+  fs.writeFileSync(
+    libImportTestPath,
+    `import { describe, expect, it } from 'vitest';
+import { computePatchOperations as fnLower } from '@kinvolk/headlamp-plugin/lib/k8s/patchUtils';
+import { computePatchOperations as fnUpper } from '@kinvolk/headlamp-plugin/lib/K8s/patchUtils';
+
+describe('plugin lib/[Kk]8s value imports', () => {
+  it('resolves a value via the lowercase path at test time', () => {
+    expect(fnLower).toBeDefined();
+    expect(typeof fnLower).toBe('function');
+  });
+  it('resolves a value via the uppercase path at test time', () => {
+    expect(fnUpper).toBeDefined();
+    expect(typeof fnUpper).toBe('function');
+  });
+  it('reaches the same underlying binding through both casings', () => {
+    expect(fnLower).toBe(fnUpper);
+  });
+});
+`
+  );
+  // `headlamp-plugin test` launches vitest without a single-run flag, and
+  // vitest only skips watch mode when it detects CI. Force CI for this one
+  // invocation so the script doesn't hang in watch mode when run locally.
+  const prevCI = process.env.CI;
+  process.env.CI = 'true';
+  try {
+    run('npm', ['run', 'test']);
+  } finally {
+    if (prevCI === undefined) {
+      delete process.env.CI;
+    } else {
+      process.env.CI = prevCI;
+    }
+    // Remove the fixture whether the test passed or failed, so a failed run
+    // doesn't leak the test file into the working tree.
+    if (fs.existsSync(libImportTestPath)) {
+      fs.rmSync(libImportTestPath);
+    }
+  }
 
   // test type script error checks
-  run('npm run tsc');
+  run('npm', ['run', 'tsc']);
+
+  fs.writeFileSync(
+    join(PACKAGE_NAME, 'src', 'toolkit.stories.tsx'),
+    `import type { Meta, StoryObj } from '@storybook/react';
+import React from 'react';
+
+const Preview = () => <button>Toolkit story</button>;
+const meta = { title: 'Toolkit/Smoke', component: Preview } satisfies Meta<typeof Preview>;
+export default meta;
+type Story = StoryObj<typeof meta>;
+export const Default: Story = {};
+`
+  );
+  run('npm', ['run', 'tsc']);
 
   // test the storybook builds
-  run('npm run storybook-build');
+  run('npm', ['run', 'storybook-build']);
+  const storyIndexPath = join(PACKAGE_NAME, 'storybook-static', 'index.json');
+  checkFileExists(storyIndexPath);
+  const storyIndex = JSON.parse(fs.readFileSync(storyIndexPath, 'utf8'));
+  if (
+    !Object.values(storyIndex.entries).some(
+      story => story.title === 'Toolkit/Smoke' && story.name === 'Default'
+    )
+  ) {
+    throw new Error('The generated plugin story was not included in the Storybook build');
+  }
+
+  // test "npm run storybook" works
+  curDir = '.';
+  run('node', ['check-storybook.mjs', PACKAGE_NAME]);
+
+  curDir = PACKAGE_NAME;
 
   // test upgrade adds missing files
   const filesToRemove = [
     'tsconfig.json',
     join('src', 'headlamp-plugin.d.ts'),
     join('.vscode', 'extensions.json'),
+    'AGENTS.md',
   ];
   filesToRemove.forEach(file => {
     fs.rmSync(join(curDir, file), { recursive: true });
   });
-  run(`node ${join('..', 'bin', 'headlamp-plugin.js')} upgrade --skip-package-updates`);
+  run('node', [join('..', 'bin', 'headlamp-plugin.js'), 'upgrade', '--skip-package-updates']);
   checkFileExists(join(curDir, 'tsconfig.json'));
   checkFileExists(join(curDir, 'src', 'headlamp-plugin.d.ts'));
   checkFileExists(join(curDir, '.vscode', 'extensions.json'));
+  checkFileExists(join(curDir, 'AGENTS.md'));
 
   // Does it upgrade "@kinvolk/headlamp-plugin" from an old version?
   // change @kinvolk/headlamp-plugin version in package.json to an old one "^0.4.9"
@@ -93,15 +262,20 @@ function testHeadlampPlugin() {
   fs.writeFileSync(packageJsonPath, changedJson);
 
   // test upgrade updates the package line, and the old version is not in there
-  run(`node ${join('..', 'bin', 'headlamp-plugin.js')} upgrade`);
+  run('node', [
+    join('..', 'bin', 'headlamp-plugin.js'),
+    'upgrade',
+    `--headlamp-plugin-version=file:${resolve(packedFile)}`,
+  ]);
   const oldVersion = '0.4.9';
   if (fs.readFileSync(packageJsonPath, 'utf8').includes(oldVersion)) {
     exit(`Error: old version still in ${packageJsonPath}`);
   }
 
   // test there are no @material-ui imports, they should be mui
-  if (fs.readFileSync(join(curDir, 'src', 'index.tsx'), 'utf8').includes('@material-ui')) {
-    exit(`Error: @material-ui imports in ${mainJsPath}`);
+  const indexTsxPath = join(curDir, 'src', 'index.tsx');
+  if (fs.readFileSync(indexTsxPath, 'utf8').includes('@material-ui')) {
+    exit(`Error: @material-ui imports in ${indexTsxPath}`);
   }
 }
 
@@ -126,24 +300,104 @@ function cleanup() {
     .forEach(folder => fs.rmSync(folder, { recursive: true }));
 }
 
-function run(cmd) {
+function run(cmd, args) {
   console.log('');
-  console.log(`Running cmd:${cmd} inside of cwd:${curDir} abs: "${resolve(curDir)}"`);
+  console.log(
+    `Running cmd:${cmd} with args:${args.join(' ')} inside of cwd:${curDir} abs: "${resolve(
+      curDir
+    )}"`
+  );
   console.log('');
   try {
-    child_process.execSync(cmd, {
+    const res = child_process.spawnSync(cmd, args, {
       stdio: 'inherit',
       cwd: curDir,
-      encoding: 'utf8',
+      env: process.env,
     });
+    if (res.error) {
+      throw res.error;
+    }
+    if (res.status !== 0) {
+      const signal = res.signal ? ` (killed by signal ${res.signal})` : '';
+      exit(
+        `Error: Problem running "${cmd} ${args.join(' ')}" inside of "${curDir}" abs: "${resolve(
+          curDir
+        )}"${signal}`
+      );
+    }
   } catch (e) {
-    exit(`Error: Problem running "${cmd}" inside of "${curDir}" abs: "${resolve(curDir)}"`);
+    exit(
+      `Error: Problem running "${cmd} ${args.join(' ')}" inside of "${curDir}" abs: "${resolve(
+        curDir
+      )}": ${e && e.message ? e.message : e}`
+    );
   }
 }
+
+function runAndCaptureOutput(cmd, args) {
+  console.log('');
+  console.log(
+    `Running cmd:${cmd} with args:${args.join(' ')} inside of cwd:${curDir} abs: "${resolve(
+      curDir
+    )}" (capturing output)`
+  );
+  console.log('');
+  try {
+    const res = child_process.spawnSync(cmd, args, {
+      cwd: curDir,
+      env: process.env,
+      encoding: 'utf8',
+    });
+    if (res.error) {
+      throw res.error;
+    }
+    const output = (res.stdout || '') + (res.stderr || '');
+    console.log(output);
+    if (res.status !== 0) {
+      const signal = res.signal ? ` (killed by signal ${res.signal})` : '';
+      exit(
+        `Error: Problem running "${cmd} ${args.join(' ')}" inside of "${curDir}" abs: "${resolve(
+          curDir
+        )}"${signal}`
+      );
+    }
+    return output;
+  } catch (e) {
+    exit(
+      `Error: Problem running "${cmd} ${args.join(' ')}" inside of "${curDir}" abs: "${resolve(
+        curDir
+      )}": ${e && e.message ? e.message : e}`
+    );
+  }
+}
+
 function checkFileExists(fname) {
   if (!fs.existsSync(fname)) {
     exit(`Error: ${fname} does not exist.`);
   }
+}
+function checkFileContains(fname, expectedContent) {
+  checkFileExists(fname);
+  if (!fs.readFileSync(fname, 'utf8').includes(expectedContent)) {
+    exit(`Error: ${fname} does not export ${expectedContent}.`);
+  }
+}
+/**
+ * The template's package-lock.json is made from a local "npm pack", so it can't know the
+ * integrity of the published @kinvolk/headlamp-plugin. If it pins one, "npm ci" fails with
+ * EINTEGRITY in plugins made with "create --noinstall".
+ */
+function checkTemplateLockHasNoPluginIntegrity() {
+  const lockPath = join('template', 'package-lock.json');
+  const packageLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  const headlampPluginLock = packageLock.packages?.['node_modules/@kinvolk/headlamp-plugin'];
+  if (!headlampPluginLock) {
+    exit(`Error: ${lockPath} has no entry for @kinvolk/headlamp-plugin.`);
+  }
+  if (headlampPluginLock.integrity) {
+    exit(`Error: ${lockPath} pins an integrity for @kinvolk/headlamp-plugin.`);
+  }
+  console.log('✓ template package-lock.json has no integrity for @kinvolk/headlamp-plugin');
 }
 function exit(message) {
   console.error(message);

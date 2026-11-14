@@ -4,6 +4,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ $fullName }}
+  namespace: {{ include "headlamp.namespace" . }}
   labels:
     {{- include "headlamp.labels" . | nindent 4 }}
   {{- with .Values.persistentVolumeClaim.annotations }}
@@ -17,11 +18,11 @@ spec:
   {{- end}}
   resources:
     requests:
-      storage: {{ .Values.persistentVolumeClaim.size }}
+      storage: {{ required "A valid .Values.persistentVolumeClaim.size entry required!" .Values.persistentVolumeClaim.size }}
   {{- with .Values.persistentVolumeClaim.volumeMode }}
   volumeMode: {{ . }}
   {{- end }}
-  {{- with .Values.persistentVolumeClaim.storageClass }}
+  {{- with .Values.persistentVolumeClaim.storageClassName }}
   storageClassName: {{ . }}
   {{- end }}
   {{- with .Values.persistentVolumeClaim.selector }}

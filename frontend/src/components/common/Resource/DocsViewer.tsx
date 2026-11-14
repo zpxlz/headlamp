@@ -1,20 +1,35 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { TreeItem } from '@mui/x-tree-view/TreeItem';
 import { TreeView } from '@mui/x-tree-view/TreeView';
-import * as buffer from 'buffer';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import getDocDefinitions from '../../../lib/docs';
 import Empty from '../EmptyContent';
 import Loader from '../Loader';
 
-// Buffer class is not polyffiled with CRA(v5) so we manually do it here
-window.Buffer = buffer.Buffer;
+export interface DocsViewerProps {
+  docSpecs: { apiVersion?: string; kind: string }[];
+}
 
-// @todo: Declare strict types.
-function DocsViewer(props: { docSpecs: any }) {
+function DocsViewer(props: DocsViewerProps) {
   const { docSpecs } = props;
   const [docs, setDocs] = React.useState<
     (
@@ -38,9 +53,9 @@ function DocsViewer(props: { docSpecs: any }) {
     setDocsLoading(true);
     // fetch docSpecs for all the resources specified
     Promise.allSettled(
-      docSpecs.map((docSpec: { apiVersion: string; kind: string }) => {
-        return getDocDefinitions(docSpec.apiVersion, docSpec.kind);
-      }) as PromiseSettledResult<any>[]
+      docSpecs.map(docSpec => {
+        return getDocDefinitions(docSpec.apiVersion ?? '', docSpec.kind);
+      })
     )
       .then(values => {
         const docSpecsFromApi = values.map((value, index) => {
@@ -92,6 +107,8 @@ function DocsViewer(props: { docSpecs: any }) {
     <>
       {docsLoading ? (
         <Loader title={t('Loading documentation')} />
+      ) : docs.length === 0 ? (
+        <Empty>{t('No documentation available.')}</Empty>
       ) : (
         docs.map((docSpec: any, idx: number) => {
           if (!docSpec.error && !docSpec.data) {

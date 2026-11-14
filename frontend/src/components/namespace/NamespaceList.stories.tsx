@@ -1,26 +1,22 @@
-import { Meta, Story } from '@storybook/react';
-import Namespace, { KubeNamespace } from '../../lib/k8s/namespace';
-import { TestContext } from '../../test';
-import { generateK8sResourceList } from '../../test/mocker';
-import NamespacesList from './List';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-Namespace.useList = () => {
-  const objList = generateK8sResourceList<KubeNamespace>(
-    {
-      kind: 'Namespace',
-      apiVersion: 'v1',
-      metadata: {},
-      spec: {
-        finalizers: ['kubernetes'],
-      },
-      status: {
-        phase: 'Active',
-      },
-    },
-    { instantiateAs: Namespace }
-  );
-  return [objList, null, () => {}, () => {}] as any;
-};
+import { Meta, StoryFn } from '@storybook/react';
+import { TestContext } from '../../test';
+import NamespacesList from './List';
 
 export default {
   title: 'Namespace/ListView',
@@ -37,7 +33,7 @@ export default {
   ],
 } as Meta;
 
-const Template: Story = () => {
+const Template: StoryFn = () => {
   return <NamespacesList />;
 };
 

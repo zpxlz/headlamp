@@ -1,3 +1,19 @@
+/*
+Copyright 2025 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package helm_test
 
 import (
@@ -12,11 +28,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/headlamp-k8s/headlamp/backend/pkg/cache"
-	"github.com/headlamp-k8s/headlamp/backend/pkg/helm"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/cache"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/helm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/action"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -46,7 +66,7 @@ func GetClient(t *testing.T, clusterName string) clientcmd.ClientConfig {
 	return clientcmd.NewInteractiveClientConfig(*config, clusterName, nil, nil, nil)
 }
 
-func getStatus(t *testing.T, ch cache.Cache[interface{}], action string, releaseName string) (string, error) {
+func getStatus(t *testing.T, ch cache.Cache[interface{}], action string, releaseName string) (string, *string) {
 	t.Helper()
 
 	statusVal, err := ch.Get(context.Background(), "helm_"+action+"_"+releaseName)
@@ -57,7 +77,7 @@ func getStatus(t *testing.T, ch cache.Cache[interface{}], action string, release
 
 	var status struct {
 		Status string
-		Err    error
+		Err    *string
 	}
 
 	err = json.Unmarshal(valueBytes, &status)
@@ -66,7 +86,7 @@ func getStatus(t *testing.T, ch cache.Cache[interface{}], action string, release
 	return status.Status, status.Err
 }
 
-//nolint:unparam
+//nolint:unparam // releaseName parameter preserved for status polling helper compatibility.
 func pingStatusTillSuccess(t *testing.T, action, releaseName string, cache cache.Cache[interface{}]) {
 	t.Helper()
 
@@ -79,8 +99,10 @@ func pingStatusTillSuccess(t *testing.T, action, releaseName string, cache cache
 
 		time.Sleep(5 * time.Second)
 
-		status, err := getStatus(t, cache, action, releaseName)
-		require.NoError(t, err)
+		status, errStr := getStatus(t, cache, action, releaseName)
+		if errStr != nil {
+			t.Fatalf("unexpected error: %s", *errStr)
+		}
 
 		if status == "success" {
 			break
@@ -96,10 +118,14 @@ func TestInstallRelease(t *testing.T) {
 	helmHandler := newHelmHandler(t)
 
 	// add headlmap repo
-	testAddRepo(t, helmHandler, "headlamp_test_repo", "https://headlamp-k8s.github.io/headlamp/")
+	testAddRepo(t, helmHandler, "headlamp_test_repo", "https://kubernetes-sigs.github.io/headlamp/")
 
 	// uninstall release if it already exists
-	listClient := action.NewList(helmHandler.Configuration)
+	k8sClientConfig := GetClient(t, "minikube")
+	actionConfig, err := helm.NewActionConfig(k8sClientConfig, "default")
+	require.NoError(t, err)
+
+	listClient := action.NewList(actionConfig)
 	listClient.AllNamespaces = true
 	listClient.Filter = "helm-test-asdf"
 	releases, err := listClient.Run()
@@ -108,7 +134,7 @@ func TestInstallRelease(t *testing.T) {
 	if len(releases) > 0 {
 		t.Log("release helm-test-asdf already exists so cleaning up")
 
-		_, err = action.NewUninstall(helmHandler.Configuration).Run("helm-test-asdf")
+		_, err = action.NewUninstall(actionConfig).Run("helm-test-asdf")
 		require.NoError(t, err)
 	}
 
@@ -131,10 +157,12 @@ func TestInstallRelease(t *testing.T) {
 		bytes.NewBuffer(installReqBytes))
 	require.NoError(t, err)
 
+	k8sClientConfig = GetClient(t, "minikube")
+
 	// response recorder
 	rr := httptest.NewRecorder()
 
-	helmHandler.InstallRelease(rr, installReleaseRequest)
+	helmHandler.InstallRelease(k8sClientConfig, rr, installReleaseRequest)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
 
@@ -149,10 +177,12 @@ func TestListRelease(t *testing.T) {
 		"GET", "/clusters/minikube/helm/releases", nil)
 	require.NoError(t, err)
 
+	k8sClientConfig := GetClient(t, "minikube")
+
 	// response recorder
 	rr := httptest.NewRecorder()
 
-	helmHandler.ListRelease(rr, listReleaseReq)
+	helmHandler.ListRelease(k8sClientConfig, rr, listReleaseReq)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), "helm-test-asdf")
@@ -181,10 +211,12 @@ func TestUpgradeRelease(t *testing.T) {
 		bytes.NewBuffer(upgradeReqBytes))
 	require.NoError(t, err)
 
+	k8sClientConfig := GetClient(t, "minikube")
+
 	// response recorder
 	rr := httptest.NewRecorder()
 
-	helmHandler.UpgradeRelease(rr, upgradeReleaseRequest)
+	helmHandler.UpgradeRelease(k8sClientConfig, rr, upgradeReleaseRequest)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
 
@@ -208,10 +240,12 @@ func TestRollbackRelease(t *testing.T) {
 		bytes.NewBuffer(rollbackReqBytes))
 	require.NoError(t, err)
 
+	k8sClientConfig := GetClient(t, "minikube")
+
 	// response recorder
 	rr := httptest.NewRecorder()
 
-	helmHandler.RollbackRelease(rr, rollbackReleaseRequest)
+	helmHandler.RollbackRelease(k8sClientConfig, rr, rollbackReleaseRequest)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
 
@@ -226,12 +260,85 @@ func TestUninstallRelease(t *testing.T) {
 		nil)
 	require.NoError(t, err)
 
+	k8sClientConfig := GetClient(t, "minikube")
+
 	// response recorder
 	rr := httptest.NewRecorder()
 
-	helmHandler.UninstallRelease(rr, uninstallReleaseRequest)
+	helmHandler.UninstallRelease(k8sClientConfig, rr, uninstallReleaseRequest)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
 
 	pingStatusTillSuccess(t, "uninstall", "helm-test-asdf", helmHandler.Cache)
+}
+
+type staticRESTGetter struct{ cfg *rest.Config }
+
+var _ genericclioptions.RESTClientGetter = (*staticRESTGetter)(nil)
+
+func (s *staticRESTGetter) ToRESTConfig() (*rest.Config, error) {
+	return s.cfg, nil
+}
+
+func (s *staticRESTGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
+	return nil, nil
+}
+
+func (s *staticRESTGetter) ToRESTMapper() (meta.RESTMapper, error) {
+	return nil, nil
+}
+
+func (s *staticRESTGetter) ToRawKubeConfigLoader() clientcmd.ClientConfig {
+	return nil
+}
+
+func TestVerifyUser(t *testing.T) {
+	tests := []struct {
+		name       string
+		req        helm.InstallRequest
+		wantResult bool
+	}{
+		{
+			name: "valid user",
+			req: helm.InstallRequest{
+				CommonInstallUpdateRequest: helm.CommonInstallUpdateRequest{
+					Name: "test-release",
+				},
+			},
+			wantResult: true,
+		},
+		{
+			name: "invalid user",
+			req: helm.InstallRequest{
+				CommonInstallUpdateRequest: helm.CommonInstallUpdateRequest{
+					Name: "test-release",
+				},
+			},
+			wantResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var actionConfig *action.Configuration
+
+			var err error
+
+			if tt.wantResult {
+				k8sClientConfig := GetClient(t, "minikube")
+				actionConfig, err = helm.NewActionConfig(k8sClientConfig, "default")
+				require.NoError(t, err)
+			} else {
+				// Create action config with invalid REST client getter
+				actionConfig = &action.Configuration{
+					RESTClientGetter: &staticRESTGetter{
+						cfg: &rest.Config{Host: ""}, // invalid/empty host triggers failure
+					},
+				}
+			}
+
+			result := helm.VerifyUser(actionConfig, tt.req)
+			assert.Equal(t, result, tt.wantResult)
+		})
+	}
 }

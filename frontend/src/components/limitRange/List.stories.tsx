@@ -1,15 +1,24 @@
-import { Meta, Story } from '@storybook/react';
-import { KubeObject } from '../../lib/k8s/cluster';
-import { LimitRange } from '../../lib/k8s/limitRange';
-import { TestContext } from '../../test';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import { LimitRangeList } from './List';
 import { LIMIT_RANGE_DUMMY_DATA } from './storyHelper';
-
-LimitRange.useList = () => {
-  const objList = LIMIT_RANGE_DUMMY_DATA.map((data: KubeObject) => new LimitRange(data));
-
-  return [objList, null, () => {}, () => {}] as any;
-};
 
 export default {
   title: 'LimitRange/ListView',
@@ -24,9 +33,24 @@ export default {
       );
     },
   ],
+  parameters: {
+    msw: {
+      handlers: {
+        story: [
+          http.get(`${API_BASE}/api/v1/limitranges`, () =>
+            HttpResponse.json({
+              kind: 'LimitRangeList',
+              metadata: {},
+              items: LIMIT_RANGE_DUMMY_DATA,
+            })
+          ),
+        ],
+      },
+    },
+  },
 } as Meta;
 
-const Template: Story = () => {
+const Template: StoryFn = () => {
   return <LimitRangeList />;
 };
 

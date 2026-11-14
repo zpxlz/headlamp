@@ -1,20 +1,56 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { KubePersistentVolume } from '../../lib/k8s/persistentVolume';
 import { KubePersistentVolumeClaim } from '../../lib/k8s/persistentVolumeClaim';
 import { KubeStorageClass } from '../../lib/k8s/storageClass';
+import type { KubeVolumeAttributesClass } from '../../lib/k8s/volumeAttributesClass';
 
 export const BASE_SC: KubeStorageClass = {
   apiVersion: 'v1',
   kind: 'StorageClass',
   metadata: {
     creationTimestamp: '2023-04-27T20:31:27Z',
-    name: 'my-pvc',
+    name: 'storage-class',
     resourceVersion: '1234',
-    uid: 'abc-1234',
+    uid: '1',
   },
   provisioner: 'csi.test',
   reclaimPolicy: 'Delete',
-  allowVolumeExpansion: true,
   volumeBindingMode: 'WaitForFirstConsumer',
+};
+
+export const BASE_SC_EXPLICIT_EXPANDABLE: KubeStorageClass = {
+  ...BASE_SC,
+  metadata: {
+    ...BASE_SC.metadata,
+    uid: '2',
+    name: 'storage-class-expandable',
+  },
+  allowVolumeExpansion: true,
+};
+
+export const BASE_SC_EXPLICIT_NON_EXPANDABLE: KubeStorageClass = {
+  ...BASE_SC,
+  metadata: {
+    ...BASE_SC.metadata,
+    uid: '3',
+    name: 'storage-class-non-expandable',
+  },
+  allowVolumeExpansion: false,
 };
 
 export const BASE_PVC: KubePersistentVolumeClaim = {
@@ -66,10 +102,30 @@ export const BASE_PV: KubePersistentVolume = {
     accessModes: ['ReadWriteOnce'],
     storageClassName: 'default',
     volumeMode: 'Filesystem',
+    resources: {
+      requests: {
+        storage: '',
+      },
+    },
   },
   status: {
     message: 'test',
     phase: 'Bound',
     reason: 'test',
+  },
+};
+
+export const BASE_VOLUME_ATTRIBUTES_CLASS: KubeVolumeAttributesClass = {
+  apiVersion: 'storage.k8s.io/v1',
+  kind: 'VolumeAttributesClass',
+  metadata: {
+    creationTimestamp: '2025-06-11T10:00:00Z',
+    name: 'my-volume-attributes-class',
+    resourceVersion: '1234',
+    uid: 'abc-1234',
+  },
+  driverName: 'csi.test',
+  parameters: {
+    'example.com/parameter': 'enabled',
   },
 };

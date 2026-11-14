@@ -1,70 +1,44 @@
-import { Box, Button, DialogContent, Grid, InputBase, Paper } from '@mui/material';
-import makeStyles from '@mui/styles/makeStyles';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import DialogContent from '@mui/material/DialogContent';
+import Grid from '@mui/material/Grid';
+import InputBase from '@mui/material/InputBase';
+import Paper from '@mui/material/Paper';
+import { alpha, useTheme } from '@mui/material/styles';
+import { FitAddon } from '@xterm/addon-fit';
+import { ISearchOptions, SearchAddon } from '@xterm/addon-search';
+import { Terminal as XTerminal } from '@xterm/xterm';
 import _ from 'lodash';
-import React, { useEffect } from 'react';
-import { useHotkeys } from 'react-hotkeys-hook';
+import { useSnackbar } from 'notistack';
+import React, { ReactNode, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ITerminalOptions, Terminal as XTerminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { ISearchOptions, SearchAddon } from 'xterm-addon-search';
+import { useShortcut } from '../../lib/useShortcut';
 import ActionButton from './ActionButton';
 import { Dialog, DialogProps } from './Dialog';
-
-interface styleProps {
-  isFullScreen: boolean;
-}
-
-const useStyle = makeStyles(theme => ({
-  dialogContent: {
-    height: '80%',
-    minHeight: '80%',
-    display: 'flex',
-    flexDirection: 'column',
-    '& .xterm ': {
-      height: '100vh', // So the terminal doesn't stay shrunk when shrinking vertically and maximizing again.
-      '& .xterm-viewport': {
-        width: 'initial !important', // BugFix: https://github.com/xtermjs/xterm.js/issues/3564#issuecomment-1004417440
-      },
-    },
-    '& #xterm-container': {
-      overflow: 'hidden',
-      width: '100%',
-      height: '100%',
-      '& .terminal.xterm': {
-        padding: 10,
-      },
-    },
-  },
-  logBox: {
-    paddingTop: theme.spacing(1),
-    flex: 1,
-    width: '100%',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column-reverse',
-    position: 'relative',
-  },
-  terminalCode: {
-    color: theme.palette.common.white,
-  },
-  terminal: {
-    backgroundColor: theme.palette.common.black,
-    height: ({ isFullScreen }: styleProps) => (isFullScreen ? '100vh' : '500px'),
-    width: '100%',
-    overflow: 'scroll',
-    marginTop: theme.spacing(3),
-  },
-  containerFormControl: {
-    minWidth: '11rem',
-  },
-}));
+import { getXtermTheme } from './xtermTheme';
 
 export interface LogViewerProps extends DialogProps {
   logs: string[];
   title?: string;
   downloadName?: string;
   onClose: () => void;
-  topActions?: JSX.Element[];
+  topActions?: ReactNode[];
   open: boolean;
   xtermRef?: React.MutableRefObject<XTerminal | null>;
   /**
@@ -76,6 +50,8 @@ export interface LogViewerProps extends DialogProps {
    * @description This is a boolean that determines whether the reconnect button should be shown or not.
    */
   showReconnectButton?: boolean;
+  /** Don't render in the dialog */
+  noDialog?: boolean;
 }
 
 export function LogViewer(props: LogViewerProps) {
@@ -90,25 +66,19 @@ export function LogViewer(props: LogViewerProps) {
     showReconnectButton = false,
     ...other
   } = props;
-  const [isFullScreen, setIsFullScreen] = React.useState(false);
-  const classes = useStyle({ isFullScreen });
   const { t } = useTranslation();
+  const { enqueueSnackbar } = useSnackbar();
+  const muiTheme = useTheme();
+  const xtermTheme = React.useMemo(() => getXtermTheme(muiTheme), [muiTheme]);
   const xtermRef = React.useRef<XTerminal | null>(null);
   const fitAddonRef = React.useRef<any>(null);
   const searchAddonRef = React.useRef<any>(null);
   const [terminalContainerRef, setTerminalContainerRef] = React.useState<HTMLElement | null>(null);
   const [showSearch, setShowSearch] = React.useState(false);
 
-  useHotkeys('ctrl+shift+f', () => {
+  useShortcut('LOG_VIEWER_SEARCH', () => {
     setShowSearch(true);
   });
-
-  const XterminalReadonlyConfig: ITerminalOptions = {
-    cursorStyle: 'bar',
-    scrollback: 10000,
-    rows: 30, // initial rows before fit
-    lineHeight: 1.21,
-  };
 
   function downloadLog() {
     // Cuts off the last 5 digits of the timestamp to remove the milliseconds
@@ -123,6 +93,66 @@ export function LogViewer(props: LogViewerProps) {
     element.click();
   }
 
+  /** Reads back what's actually rendered in the terminal, so filtering/formatting applied by callers (e.g. severity filters) is preserved in the copy. Falls back to the raw logs if the terminal isn't available. */
+  function getRenderedLogsText() {
+    const buffer = xtermRef.current?.buffer?.active;
+    if (!buffer) {
+      return logs.join('');
+    }
+
+    // Rows below the cursor are the unused viewport unless they hold text (for
+    // example after a cursor-up escape), so extend to the last populated row but
+    // never stop before the cursor row, which keeps a trailing newline.
+    let lastRow = buffer.baseY + buffer.cursorY;
+    for (let i = buffer.length - 1; i > lastRow; i--) {
+      if (buffer.getLine(i)?.translateToString(true)) {
+        lastRow = i;
+        break;
+      }
+    }
+
+    const lines: string[] = [];
+    for (let i = 0; i <= lastRow; i++) {
+      const line = buffer.getLine(i);
+      // Only trim the last physical row of a logical line so spaces at a wrap
+      // boundary survive when the rows are joined back together.
+      const continuesOnNextRow = buffer.getLine(i + 1)?.isWrapped ?? false;
+      const text = line?.translateToString(!continuesOnNextRow) ?? '';
+      if (line?.isWrapped && lines.length > 0) {
+        lines[lines.length - 1] += text;
+      } else {
+        lines.push(text);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  async function copyLogs() {
+    const text = getRenderedLogsText();
+
+    if (!navigator.clipboard) {
+      console.error(
+        'Failed to copy logs to clipboard: navigator.clipboard is unavailable (Headlamp is likely being served over an insecure, non-HTTPS connection).'
+      );
+      enqueueSnackbar(
+        t(
+          'translation|Clipboard is not available. This can happen when Headlamp is served over an insecure (non-HTTPS) connection.'
+        ),
+        { variant: 'error' }
+      );
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      enqueueSnackbar(t('translation|Copied to clipboard'), { variant: 'success' });
+    } catch (err) {
+      console.error('Failed to copy logs to clipboard:', err);
+      enqueueSnackbar(t('translation|Failed to copy to clipboard'), { variant: 'error' });
+    }
+  }
+
   React.useEffect(() => {
     if (!terminalContainerRef || !!xtermRef.current) {
       return;
@@ -131,7 +161,14 @@ export function LogViewer(props: LogViewerProps) {
     fitAddonRef.current = new FitAddon();
     searchAddonRef.current = new SearchAddon();
 
-    xtermRef.current = new XTerminal(XterminalReadonlyConfig);
+    xtermRef.current = new XTerminal({
+      cursorStyle: 'bar',
+      scrollback: 10000,
+      rows: 30, // initial rows before fit
+      lineHeight: 1.21,
+      allowProposedApi: true,
+      theme: xtermTheme,
+    });
 
     if (!!outXtermRef) {
       outXtermRef.current = xtermRef.current;
@@ -159,7 +196,14 @@ export function LogViewer(props: LogViewerProps) {
       searchAddonRef.current?.dispose();
       xtermRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalContainerRef, xtermRef.current]);
+
+  React.useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.options.theme = xtermTheme;
+    }
+  }, [xtermTheme]);
 
   React.useEffect(() => {
     if (!xtermRef.current) {
@@ -175,69 +219,120 @@ export function LogViewer(props: LogViewerProps) {
     xtermRef.current?.write(getJointLogs());
 
     return function cleanup() {};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logs, xtermRef]);
 
   function getJointLogs() {
     return logs?.join('').replaceAll('\n', '\r\n');
   }
 
+  const content = (
+    <DialogContent
+      sx={theme => ({
+        height: '80%',
+        minHeight: '80%',
+        display: 'flex',
+        flexDirection: 'column',
+        '& .xterm ': {
+          height: '100vh', // So the terminal doesn't stay shrunk when shrinking vertically and maximizing again.
+          '& .xterm-viewport': {
+            width: 'initial !important', // BugFix: https://github.com/xtermjs/xterm.js/issues/3564#issuecomment-1004417440
+          },
+        },
+        '& #xterm-container': {
+          overflow: 'hidden',
+          width: '100%',
+          height: '100%',
+          '& .terminal.xterm': {
+            padding: theme.spacing(1),
+          },
+        },
+      })}
+    >
+      <Grid container justifyContent="space-between" alignItems="center" wrap="nowrap">
+        <Grid item container spacing={1}>
+          {topActions.map((component, i) => (
+            <Grid item key={i}>
+              {component}
+            </Grid>
+          ))}
+        </Grid>
+        <Grid item xs>
+          <ActionButton
+            description={t('translation|Find')}
+            onClick={() => setShowSearch(show => !show)}
+            icon="mdi:magnify"
+          />
+        </Grid>
+        <Grid item xs>
+          <ActionButton
+            description={t('translation|Clear')}
+            onClick={() => clearPodLogs(xtermRef)}
+            icon="mdi:broom"
+          />
+        </Grid>
+        <Grid item xs>
+          <ActionButton
+            description={t('Download')}
+            onClick={downloadLog}
+            icon="mdi:file-download-outline"
+          />
+        </Grid>
+        <Grid item xs>
+          <ActionButton
+            description={t('translation|Copy to clipboard')}
+            onClick={copyLogs}
+            icon="mdi:content-copy"
+          />
+        </Grid>
+      </Grid>
+      <Box
+        sx={theme => ({
+          paddingTop: theme.spacing(1),
+          flex: 1,
+          width: '100%',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column-reverse',
+          position: 'relative',
+        })}
+      >
+        {showReconnectButton && (
+          <Button onClick={handleReconnect} color="info" variant="contained">
+            {t('translation|Reconnect')}
+          </Button>
+        )}
+        <div
+          id="xterm-container"
+          ref={ref => setTerminalContainerRef(ref)}
+          style={{ flex: 1, display: 'flex', flexDirection: 'column-reverse' }}
+        />
+        <SearchPopover
+          open={showSearch}
+          onClose={() => setShowSearch(false)}
+          searchAddonRef={searchAddonRef}
+        />
+      </Box>
+    </DialogContent>
+  );
+
+  if (props.noDialog) {
+    return content;
+  }
+
   return (
     <Dialog
       title={title}
+      onFullScreenToggled={() => {
+        setTimeout(() => {
+          fitAddonRef.current!.fit();
+        }, 1);
+      }}
       withFullScreen
-      onFullScreenToggled={setIsFullScreen}
       onClose={onClose}
       {...other}
     >
-      <DialogContent className={classes.dialogContent}>
-        <Grid container justifyContent="space-between" alignItems="center" wrap="nowrap">
-          <Grid item container spacing={1}>
-            {topActions.map((component, i) => (
-              <Grid item key={i}>
-                {component}
-              </Grid>
-            ))}
-          </Grid>
-          <Grid item xs>
-            <ActionButton
-              description={t('translation|Find')}
-              onClick={() => setShowSearch(show => !show)}
-              icon="mdi:magnify"
-            />
-          </Grid>
-          <Grid item xs>
-            <ActionButton
-              description={t('translation|Clear')}
-              onClick={() => clearPodLogs(xtermRef)}
-              icon="mdi:broom"
-            />
-          </Grid>
-          <Grid item xs>
-            <ActionButton
-              description={t('Download')}
-              onClick={downloadLog}
-              icon="mdi:file-download-outline"
-            />
-          </Grid>
-        </Grid>
-        <Box className={classes.logBox}>
-          {showReconnectButton && (
-            <Button onClick={handleReconnect} color="info" variant="contained">
-              Reconnect
-            </Button>
-          )}
-          <div
-            id="xterm-container"
-            ref={ref => setTerminalContainerRef(ref)}
-            style={{ flex: 1, display: 'flex', flexDirection: 'column-reverse' }}
-          />
-          <SearchPopover
-            open={showSearch}
-            onClose={() => setShowSearch(false)}
-            searchAddonRef={searchAddonRef}
-          />
-        </Box>
-      </DialogContent>
+      {content}
     </Dialog>
   );
 }
@@ -264,78 +359,6 @@ function enableCopyPasteInXterm(xterm: XTerminal) {
   });
 }
 
-const useSearchBoxStyle = makeStyles(theme => {
-  const baseGray = '#cccccc';
-  const grayText = {
-    color: baseGray,
-  };
-  const redText = {
-    color: '#f48771',
-  };
-
-  //@todo: This style should match the theme being used.
-  return {
-    grayText,
-    redText,
-    root: {
-      position: 'absolute',
-      background: '#252526',
-      top: 8,
-      right: 15,
-      padding: '4px 8px',
-      zIndex: theme.zIndex.modal,
-      display: 'flex',
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderLeft: `2px solid #555`,
-      '& .SearchTextArea': {
-        background: '#3c3c3c',
-        display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: '1px 4px 2px 0',
-        width: 240,
-        '& .MuiInputBase-root': {
-          color: baseGray,
-          fontSize: '0.85rem',
-          border: '1px solid rgba(0,0,0,0)',
-          '&.Mui-focused': {
-            border: `1px solid #007fd4`,
-          },
-          '&>input': {
-            padding: '2px 4px',
-          },
-        },
-        '& .MuiIconButton-root': {
-          margin: '0 1px',
-          padding: theme.spacing(0.5),
-          fontSize: '1.05rem',
-          color: baseGray,
-          borderRadius: 4,
-          '&.checked': {
-            background: '#245779',
-          },
-        },
-      },
-      '& .search-results': {
-        width: 70,
-        marginLeft: 8,
-        fontSize: '0.8rem',
-      },
-      '& .search-actions': {
-        '& .MuiIconButton-root': {
-          padding: 2,
-          fontSize: '1.05rem',
-          color: baseGray,
-          '&.Mui-disabled': {
-            color: '#767677',
-          },
-        },
-      },
-    },
-  };
-});
-
 interface SearchPopoverProps {
   searchAddonRef: { current: SearchAddon | null };
   open: boolean;
@@ -344,7 +367,8 @@ interface SearchPopoverProps {
 
 export function SearchPopover(props: SearchPopoverProps) {
   const { searchAddonRef, open, onClose } = props;
-  const classes = useSearchBoxStyle();
+  const muiTheme = useTheme();
+  const isDark = muiTheme.palette.mode === 'dark';
   const [searchResult, setSearchResult] = React.useState<
     { resultIndex: number; resultCount: number } | undefined
   >(undefined);
@@ -354,7 +378,7 @@ export function SearchPopover(props: SearchPopoverProps) {
   const [regexChecked, setRegexChecked] = React.useState<boolean>(false);
   const { t } = useTranslation(['translation']);
   const focusedRef = React.useCallback(
-    node => {
+    (node: HTMLInputElement) => {
       if (open && !!node) {
         node.focus();
         node.select();
@@ -366,10 +390,10 @@ export function SearchPopover(props: SearchPopoverProps) {
   const randomId = _.uniqueId('search-input-');
 
   const searchAddonTextDecorationOptions: ISearchOptions['decorations'] = {
-    matchBackground: '#6d402a',
-    activeMatchBackground: '#515c6a',
-    matchOverviewRuler: '#f00',
-    activeMatchColorOverviewRuler: '#515c6a',
+    matchBackground: alpha(muiTheme.palette.warning.main, 0.5),
+    activeMatchBackground: alpha(muiTheme.palette.primary.main, 0.6),
+    matchOverviewRuler: muiTheme.palette.warning.main,
+    activeMatchColorOverviewRuler: muiTheme.palette.primary.main,
   };
 
   useEffect(() => {
@@ -378,6 +402,11 @@ export function SearchPopover(props: SearchPopoverProps) {
       searchAddonRef.current?.clearActiveDecoration();
       return;
     }
+
+    // findNext emits results synchronously, so subscribe before starting the search.
+    const disposable = searchAddonRef.current?.onDidChangeResults(args => {
+      setSearchResult(args);
+    });
 
     try {
       searchAddonRef.current?.findNext(searchText, {
@@ -388,18 +417,31 @@ export function SearchPopover(props: SearchPopoverProps) {
       });
     } catch (e) {
       // Catch invalid regular expression error
-      console.log('Error searching logs: ', e);
+      console.error('Error searching logs: ', e);
       searchAddonRef.current?.findNext('');
     }
 
-    searchAddonRef.current?.onDidChangeResults(args => {
-      setSearchResult(args);
-    });
-
     return function cleanup() {
+      disposable?.dispose();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       searchAddonRef.current?.findNext('');
     };
-  }, [searchText, caseSensitiveChecked, wholeWordMatchChecked, regexChecked, open]);
+    // searchAddonTextDecorationOptions is rebuilt every render, but we still
+    // want the existing match highlights / overview-ruler markers to update
+    // when the user toggles themes mid-search, so we depend on the resolved
+    // decoration colors rather than the object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    searchText,
+    caseSensitiveChecked,
+    wholeWordMatchChecked,
+    regexChecked,
+    open,
+    searchAddonTextDecorationOptions.matchBackground,
+    searchAddonTextDecorationOptions.activeMatchBackground,
+    searchAddonTextDecorationOptions.matchOverviewRuler,
+    searchAddonTextDecorationOptions.activeMatchColorOverviewRuler,
+  ]);
 
   const handleFindNext = () => {
     searchAddonRef.current?.findNext(searchText, {
@@ -437,18 +479,26 @@ export function SearchPopover(props: SearchPopoverProps) {
     }
   };
 
+  const searchTextColor = muiTheme.palette.text.primary;
+  const grayText = {
+    color: searchTextColor,
+  };
+  const redText = {
+    color: muiTheme.palette.error.main,
+  };
+
   const searchResults = () => {
-    let className = classes.grayText;
+    let color = grayText;
     let msg = '';
     if (!searchText) {
       msg = t('translation|No results');
     } else if (!searchResult) {
       msg = t('translation|Too many matches');
-      className = classes.redText;
+      color = redText;
     } else {
       if (searchResult.resultCount === 0) {
         msg = t('translation|No results');
-        className = classes.redText;
+        color = redText;
       } else {
         msg = t('translation|{{ currentIndex }} of {{ totalResults }}', {
           currentIndex:
@@ -459,13 +509,83 @@ export function SearchPopover(props: SearchPopoverProps) {
       }
     }
 
-    return <span className={className}>{msg}</span>;
+    return (
+      <Box component="span" sx={color}>
+        {msg}
+      </Box>
+    );
   };
 
   return !open ? (
     <></>
   ) : (
-    <Paper className={classes.root}>
+    <Paper
+      sx={theme => {
+        const popoverBg = theme.palette.background.paper;
+        const inputBg = theme.palette.action.hover;
+        const borderColor = theme.palette.divider;
+        const focusBorder = theme.palette.primary.main;
+        const checkedBg = alpha(theme.palette.primary.main, isDark ? 0.4 : 0.2);
+        const disabledColor = theme.palette.action.disabled;
+        return {
+          position: 'absolute',
+          background: popoverBg,
+          top: 8,
+          right: 15,
+          padding: '4px 8px',
+          zIndex: theme.zIndex.modal,
+          marginRight: '7px',
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'center',
+          borderLeft: `2px solid ${borderColor}`,
+          '& .SearchTextArea': {
+            background: inputBg,
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            padding: '1px 4px 2px 0',
+            width: 240,
+            '& .MuiInputBase-root': {
+              color: searchTextColor,
+              fontSize: '0.85rem',
+              border: '1px solid rgba(0,0,0,0)',
+              '&.Mui-focused': {
+                border: `1px solid ${focusBorder}`,
+              },
+              '&>input': {
+                padding: '2px 4px',
+              },
+            },
+            '& .MuiIconButton-root': {
+              margin: '0 1px',
+              padding: theme.spacing(0.5),
+              fontSize: '1.05rem',
+              color: searchTextColor,
+              borderRadius: 4,
+              '&.checked': {
+                background: checkedBg,
+              },
+            },
+          },
+          '& .search-results': {
+            width: 70,
+            marginLeft: 8,
+            fontSize: '0.8rem',
+          },
+          '& .search-actions': {
+            '& .MuiIconButton-root': {
+              padding: 2,
+              fontSize: '1.05rem',
+              color: searchTextColor,
+              '&.Mui-disabled': {
+                color: disabledColor,
+              },
+            },
+          },
+        };
+      }}
+    >
       <Box className="SearchTextArea">
         <InputBase
           value={searchText}

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Meta, StoryFn } from '@storybook/react';
 import { TestContext } from '../../test';
 import { PureAuthChooser, PureAuthChooserProps } from './index';
@@ -32,7 +48,6 @@ const argFixture = {
   error: null,
   oauthUrl: 'http://example.com/',
   clusterAuthType: '',
-  haveClusters: false,
 };
 
 export const BasicAuthChooser = Template.bind({});
@@ -49,17 +64,27 @@ Testing.args = {
 export const HaveClusters = Template.bind({});
 HaveClusters.args = {
   ...argFixture,
-  haveClusters: true,
+  title: 'Select a cluster to sign in',
 };
 
 export const AuthTypeoidc = Template.bind({});
 AuthTypeoidc.args = {
   ...argFixture,
   clusterAuthType: 'oidc',
+  title: 'Sign in with OpenID Connect',
+};
+
+export const AuthTypeoidcTokenRejected = Template.bind({});
+AuthTypeoidcTokenRejected.args = {
+  ...argFixture,
+  clusterAuthType: 'oidc',
+  oidcTokenRejected: true,
+  title: 'Authentication',
 };
 
 export const AnError = Template.bind({});
 AnError.args = {
   ...argFixture,
+  title: 'Authentication',
   error: Error('Oh no! Some error happened?!?'),
 };

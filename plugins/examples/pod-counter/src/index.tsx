@@ -1,5 +1,20 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import {
-  AppBarActionsProcessorArgs,
   DefaultAppBarAction,
   K8s,
   registerAppBarAction,
@@ -13,13 +28,16 @@ import Message from './Message';
 function PodCounter() {
   const [pods, error] = K8s.ResourceClasses.Pod.useList();
   const msg = pods === null ? 'Loading…' : pods.length.toString();
-  return <Message msg={msg} error={error} />;
+  return <Message msg={msg} error={error !== null} />;
 }
 
 registerAppBarAction(PodCounter);
 
 // We can also reorder the actions in the app bar.
-registerAppBarAction(function reorderNotifications({ actions }: AppBarActionsProcessorArgs) {
+registerAppBarAction(function reorderNotifications({ actions }) {
+  if (!actions) {
+    return actions;
+  }
   // Remove the notifications action button
   const newActions = actions.filter(action => action.id !== DefaultAppBarAction.NOTIFICATION);
 
@@ -54,7 +72,7 @@ function Settings(props) {
    * @param {React.ChangeEvent<HTMLInputElement>} event - The change event from the input field.
    */
   const handleChange = event => {
-    onDataChange({ errorMessage: event.target.value });
+    onDataChange?.({ ...data, errorMessage: event.target.value });
   };
 
   const settingsRows = [
@@ -64,9 +82,10 @@ function Settings(props) {
         <TextField
           fullWidth
           helperText="Enter the custom error message to display when the pod count cannot be retrieved."
-          defaultValue={data?.errorMessage ? data.errorMessage : 'Uh... pods!?'}
+          value={data?.errorMessage ?? 'Uh... pods!?'}
           onChange={handleChange}
           variant="standard"
+          inputProps={{ 'aria-label': 'Custom Error Message' }}
         />
       ),
     },

@@ -1,21 +1,43 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import '../../../i18n/config';
-import _ from 'lodash';
+import _, { List } from 'lodash';
 import { useTranslation } from 'react-i18next';
-import { KubeMetrics, KubeObject } from '../../../lib/k8s/cluster';
+import type { ApiError } from '../../../lib/k8s/api/v2/ApiError';
+import { KubeMetrics } from '../../../lib/k8s/cluster';
+import { KubeObject } from '../../../lib/k8s/KubeObject';
+import Node from '../../../lib/k8s/node';
+import Pod from '../../../lib/k8s/pod';
 import { PercentageCircleProps } from '../Chart';
 import TileChart from '../TileChart';
 
 export interface CircularChartProps extends Omit<PercentageCircleProps, 'data'> {
   /** Items to display in the chart (should have a corresponding value in @param itemsMetrics) */
-  items: KubeObject[] | null;
+  items: Node[] | Pod[] | null;
   /** Metrics to display in the chart (for items in @param items) */
   itemsMetrics: KubeMetrics[] | null;
   /** Whether no metrics are available. If true, then instead of a chart, a message will be displayed */
   noMetrics?: boolean;
+  /** Error from fetching the metrics, if any. Used to tell a failed load apart from one still in progress. */
+  metricsError?: ApiError | null;
   /** Function to get the "used" value for the metrics in question */
-  resourceUsedGetter?: (node: KubeObject) => number;
+  resourceUsedGetter?: (node: KubeMetrics) => number;
   /** Function to get the "available" value for the metrics in question */
-  resourceAvailableGetter?: (node: KubeObject) => number;
+  resourceAvailableGetter?: (node: Node | Pod) => number;
   /** Function to create a legend for the data */
   getLegend?: (used: number, available: number) => string;
   /** Tooltip to display when hovering over the chart */
@@ -27,6 +49,7 @@ export function CircularChart(props: CircularChartProps) {
     items,
     itemsMetrics,
     noMetrics = false,
+    metricsError = null,
     resourceUsedGetter,
     resourceAvailableGetter,
     title,
@@ -54,9 +77,14 @@ export function CircularChart(props: CircularChartProps) {
   function getResourceUsage() {
     if (!items) return [-1, -1];
 
+    // Metrics haven't arrived yet (no data and no error). Report this as a
+    // loading state (-1) instead of computing a usage of 0, so the tile shows
+    // '…' rather than a misleading 0% until the real values load.
+    if (!noMetrics && !metricsError && itemsMetrics === null) return [-1, -1];
+
     const nodeMetrics = filterMetrics(items, itemsMetrics);
     const usedValue = _.sumBy(nodeMetrics, resourceUsedGetter);
-    const availableValue = _.sumBy(items, resourceAvailableGetter);
+    const availableValue = _.sumBy(items as List<Node | Pod>, resourceAvailableGetter);
 
     return [usedValue, availableValue];
   }

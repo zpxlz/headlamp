@@ -1,29 +1,31 @@
 'use strict';
 
-const fse = require('fs-extra');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 
-// This is a needed workaround because electron-builder is discarding the
-// node_modules of the dependencies and that was making the app fail.
 exports.default = async context => {
-  let dest = path.join(context.appOutDir, 'resources/app/node_modules');
+  const startedAt = Date.now();
+  console.log(`[build-timing] Electron afterPack started at ${new Date(startedAt).toISOString()}`);
+  const { loadBuildManifest, verifyPackagedResources } = await import(
+    '../build/build-manifest.mjs'
+  );
+  const resourcesDirectory = context.packager?.getResourcesDir
+    ? context.packager.getResourcesDir(context.appOutDir)
+    : path.join(context.appOutDir, 'resources');
 
-  if (context.electronPlatformName === 'darwin') {
-    dest = path.join(context.appOutDir, 'Headlamp.app/Contents/Resources/app/node_modules');
-  }
-
-  try {
-    fse.copySync('./prod_deps/node_modules', dest);
-  } catch (err) {
-    console.error('Failed to copy node_modules after pack:', err);
-  }
-
-  if (fse.existsSync('.env')) {
+  if (fs.existsSync('.env')) {
     console.info('Copying .env file to app resources directory!');
     try {
-      fse.copySync('./.env', path.join(context.appOutDir, 'resources', '.env'));
+      fs.copyFileSync('.env', path.join(resourcesDirectory, '.env'));
     } catch (err) {
       console.error('Failed to copy .env after pack:', err);
     }
   }
+
+  verifyPackagedResources(resourcesDirectory, loadBuildManifest(), context.electronPlatformName);
+  console.log(
+    `[build-timing] Electron afterPack completed in ${((Date.now() - startedAt) / 1000).toFixed(
+      3
+    )}s`
+  );
 };

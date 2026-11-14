@@ -1,4 +1,22 @@
-import helpers from '../helpers';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { getProductName, getVersion } from '../helpers/getProductInfo';
+import { isElectron } from '../helpers/isElectron';
+import { setCluster } from '../lib/k8s/api/v1/clusterApi';
 /**
  * The lib.ts file should carry the bits to be used by plugins whereas
  * the index.ts should have the functions that Headlamp itself needs for
@@ -29,7 +47,7 @@ import helpers from '../helpers';
  *
  * @see {@link https://headlamp.dev/docs/latest/development/plugins/functionality/ Plugin functionality}
  */
-import { ClusterRequest, setCluster } from '../lib/k8s/apiProxy';
+import { ClusterRequest } from '../lib/k8s/api/v1/clusterRequests';
 import Registry from './registry';
 
 /**
@@ -49,6 +67,18 @@ export abstract class Plugin {
   abstract initialize(register: Registry): boolean | void;
 }
 
+/** APIs exposed to Headlamp's renderer process by the desktop preload bridge. */
+export interface DesktopApi {
+  /** Ends an OIDC session in an isolated desktop browser window. */
+  oidcLogout?: (cluster: string) => Promise<void>;
+  /** Operating system platform hosting the desktop app. */
+  platform: NodeJS.Platform;
+  /** Whether Electron is running in development mode, independent of the frontend build mode. */
+  isDevelopment?: boolean;
+  /** Additional APIs exposed by the desktop preload bridge. */
+  [key: string]: any;
+}
+
 declare global {
   interface Window {
     pluginLib: {
@@ -58,7 +88,7 @@ declare global {
       [pluginId: string]: Plugin;
     };
     registerPlugin: (pluginId: string, pluginObj: Plugin) => void;
-    desktopApi: any;
+    desktopApi: DesktopApi;
   }
 }
 
@@ -68,7 +98,8 @@ declare global {
  * "url" field instead).
  */
 export interface AppMenu {
-  /** A URL to open (if not starting with http, then it'll be opened in the external browser) */
+  /** A URL to open: an app URL is opened in the app window, an http(s) URL in the
+   * external browser. Other URLs are ignored. */
   url?: string;
   /** The submenus of this menu */
   submenu?: AppMenu[];
@@ -133,7 +164,7 @@ export abstract class Headlamp {
    * @param appMenuFunc A function that receives the current app menu configuration and a new one. If the function returns null, the menu is not changed.
    */
   static setAppMenu(appMenuFunc: (currentAppMenuSpec: AppMenu[] | null) => AppMenu[] | null) {
-    if (!helpers.isElectron()) {
+    if (!isElectron()) {
       console.error('Cannot set app menu: not running as a desktop app!');
       return;
     }
@@ -149,7 +180,7 @@ export abstract class Headlamp {
    * @returns true if Headlamp is running as a desktop app.
    */
   static isRunningAsApp() {
-    return helpers.isElectron();
+    return isElectron();
   }
 
   /**
@@ -160,7 +191,7 @@ export abstract class Headlamp {
    * @returns the version of Headlamp.
    */
   getVersion() {
-    const version = helpers.getVersion();
+    const version = getVersion();
     return { VERSION: version.VERSION || '', GIT_VERSION: version.GIT_VERSION || '' };
   }
 
@@ -170,7 +201,7 @@ export abstract class Headlamp {
    * @returns the name of the product.
    */
   getProductName() {
-    return helpers.getProductName() || '';
+    return getProductName() || '';
   }
 }
 

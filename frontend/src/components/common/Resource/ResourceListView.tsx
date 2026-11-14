@@ -1,50 +1,99 @@
-import React, { PropsWithChildren } from 'react';
-import { useTranslation } from 'react-i18next';
-import { ActionButton } from '..';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import React, { PropsWithChildren, ReactElement, ReactNode } from 'react';
+import { KubeObject, KubeObjectClass } from '../../../lib/k8s/KubeObject';
+import { BackLinkProps } from '../BackLink';
+import { CreateResourceButton } from '../CreateResourceButton';
 import SectionBox from '../SectionBox';
 import SectionFilterHeader, { SectionFilterHeaderProps } from '../SectionFilterHeader';
-import ResourceTable, {
-  ResourceTableFromResourceClassProps,
-  ResourceTableProps,
-} from './ResourceTable';
+import { EmptyStateActions } from './EmptyStateActions';
+import ResourceTable, { ResourceTableProps } from './ResourceTable';
 
-export interface ResourceListViewProps extends PropsWithChildren<ResourceTableProps> {
-  title: string | JSX.Element;
+export interface ResourceListViewProps<Item extends KubeObject>
+  extends PropsWithChildren<Omit<ResourceTableProps<Item>, 'data'>> {
+  title: ReactNode;
+  //** The location to go back to. If provided as an empty string, the browser's history will be used. If not provided (default)), then no back button is used. */
+  backLink?: BackLinkProps['to'] | boolean;
   headerProps?: Omit<SectionFilterHeaderProps, 'title'>;
+  data: Item[] | null;
 }
 
-export interface ResourceListViewWithResourceClassProps
-  extends Omit<ResourceListViewProps, 'data'> {
-  resourceClass: ResourceTableFromResourceClassProps['resourceClass'];
+export interface ResourceListViewWithResourceClassProps<ItemClass extends KubeObjectClass>
+  extends PropsWithChildren<Omit<ResourceTableProps<InstanceType<ItemClass>>, 'data'>> {
+  title: ReactNode;
+  //** The location to go back to. If provided as an empty string, the browser's history will be used. If not provided (default)), then no back button is used. */
+  backLink?: BackLinkProps['to'] | boolean;
+  headerProps?: Omit<SectionFilterHeaderProps, 'title'>;
+  resourceClass: ItemClass;
+  /**
+   * The clusters to list from. Defaults to every selected cluster; a resource
+   * served by only some of them passes the subset that serves it, so the others
+   * are not queried. An empty list queries no cluster and shows an empty table.
+   * The create action targets the first of them, and is left out when there is none.
+   */
+  clusters?: string[];
 }
 
+export default function ResourceListView<ItemClass extends KubeObjectClass>(
+  props: ResourceListViewWithResourceClassProps<ItemClass>
+): ReactElement;
+export default function ResourceListView<Item extends KubeObject<any>>(
+  props: ResourceListViewProps<Item>
+): ReactElement;
 export default function ResourceListView(
-  props: ResourceListViewProps | ResourceListViewWithResourceClassProps
+  props: ResourceListViewProps<any> | ResourceListViewWithResourceClassProps<any>
 ) {
-  const { title, children, headerProps, ...tableProps } = props;
-  const { t } = useTranslation();
-  const [columnChooserAnchorEl, setColumnChooserAnchorEl] = React.useState<null | HTMLElement>(
-    null
-  );
-  const withNamespaceFilter = (props as ResourceListViewWithResourceClassProps).resourceClass
-    ?.isNamespaced;
+  const { title, children, backLink, headerProps, ...tableProps } = props;
+  const withNamespaceFilter = 'resourceClass' in props && props.resourceClass?.isNamespaced;
+  const resourceClass = (props as ResourceListViewWithResourceClassProps<any>)
+    .resourceClass as KubeObjectClass;
+  const clusters = (props as ResourceListViewWithResourceClassProps<any>).clusters;
+  const createActions =
+    resourceClass && clusters?.length !== 0
+      ? [<CreateResourceButton resourceClass={resourceClass} cluster={clusters?.[0]} />]
+      : undefined;
+
+  // Default the empty-state actions to a Create + Refresh row on top-level
+  // resource list views (identified by a `resourceClass` prop). Nested
+  // embedded lists on Details pages don't get the auto-default; they can
+  // still opt in by passing `emptyActions` explicitly. Passing
+  // `emptyActions={null}` opts out even when a class is present.
+  let emptyActions = tableProps.emptyActions;
+  if (emptyActions === undefined && resourceClass) {
+    // Like the header create action above, the empty-state Create button
+    // targets the first of the clusters the list is limited to, and is left
+    // out when the list is limited to no cluster (only Refresh remains).
+    emptyActions = (
+      <EmptyStateActions
+        resourceClass={clusters?.length !== 0 ? resourceClass : undefined}
+        cluster={clusters?.[0]}
+      />
+    );
+  }
 
   return (
     <SectionBox
+      backLink={backLink}
       title={
         typeof title === 'string' ? (
           <SectionFilterHeader
             title={title}
-            actions={[
-              <ActionButton
-                icon="mdi:view-column"
-                description={t('Change columns displayed')}
-                onClick={event => {
-                  setColumnChooserAnchorEl(() => event.currentTarget);
-                }}
-              />,
-            ]}
             noNamespaceFilter={!withNamespaceFilter}
+            titleSideActions={headerProps?.titleSideActions || createActions}
             {...headerProps}
           />
         ) : (
@@ -53,9 +102,10 @@ export default function ResourceListView(
       }
     >
       <ResourceTable
-        columnChooserAnchor={columnChooserAnchorEl}
-        onColumnChooserClose={() => setColumnChooserAnchorEl(null)}
         {...tableProps}
+        emptyActions={emptyActions}
+        enableRowActions={tableProps.enableRowActions ?? true}
+        enableRowSelection={tableProps.enableRowSelection ?? true}
       />
       {children}
     </SectionBox>

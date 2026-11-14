@@ -1,50 +1,78 @@
-import helpers from './index';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import * as getAppUrl from './getAppUrl';
+import * as isDevMode from './isDevMode';
+import * as isElectron from './isElectron';
 
 describe('getAppUrl', () => {
   afterEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
-  const windowSpy = jest.spyOn(window, 'window', 'get') as jest.MockInstance<any, any>;
+  const windowSpy = vi.spyOn<any, any>(window, 'window', 'get');
 
   test('dev mode', () => {
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => true);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => false);
-    expect(helpers.getAppUrl()).toBe('http://localhost:4466/');
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => true);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => false);
+    expect(getAppUrl.getAppUrl()).toBe('http://localhost:4466/');
   });
   test('dev mode and isElectron', () => {
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => true);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => true);
-    expect(helpers.getAppUrl()).toBe('http://localhost:4466/');
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => true);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => true);
+    expect(getAppUrl.getAppUrl()).toBe('/');
   });
   test('isElectron, not dev mode', () => {
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => false);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => true);
-    expect(helpers.getAppUrl()).toBe('http://localhost:4466/');
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => false);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => true);
+    expect(getAppUrl.getAppUrl()).toBe('/');
+  });
+
+  test('isElectron uses the confirmed IPv4 backend endpoint', () => {
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => false);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => true);
+    windowSpy.mockImplementation(() => ({
+      headlampBackendPort: 4467,
+    }));
+
+    expect(getAppUrl.getAppUrl()).toBe('http://127.0.0.1:4467/');
   });
 
   test('base-url is set through headlampBaseUrl variable', () => {
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => true);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => false);
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => true);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => false);
 
     windowSpy.mockImplementation(() => ({
       headlampBaseUrl: '/headlamp',
     }));
-    expect(helpers.getAppUrl()).toBe('http://localhost:4466/headlamp/');
+    expect(getAppUrl.getAppUrl()).toBe('http://localhost:4466/headlamp/');
   });
 
   test('isElectron does not use a base-url set', () => {
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => false);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => true);
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => false);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => true);
 
     windowSpy.mockImplementation(() => ({
       headlampBaseUrl: '/headlamp',
     }));
-    expect(helpers.getAppUrl()).toBe('http://localhost:4466/');
+    expect(getAppUrl.getAppUrl()).toBe('/');
   });
 
   test('base-url is used without dev mode and without isElectron, uses window.location.origin', () => {
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => false);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => false);
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => false);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => false);
 
     windowSpy.mockImplementation(() => ({
       headlampBaseUrl: '/headlamp',
@@ -52,13 +80,13 @@ describe('getAppUrl', () => {
         origin: 'http://example.com:4466',
       },
     }));
-    expect(helpers.getAppUrl()).toBe('http://example.com:4466/headlamp/');
+    expect(getAppUrl.getAppUrl()).toBe('http://example.com:4466/headlamp/');
   });
 
   test('When headlampBaseUrl is set to "." it uses no base-url', () => {
     // This can happen with the Create React App build process which optimizes the "./" to "."
-    jest.spyOn(helpers, 'isDevMode').mockImplementation(() => false);
-    jest.spyOn(helpers, 'isElectron').mockImplementation(() => false);
+    vi.spyOn(isDevMode, 'isDevMode').mockImplementation(() => false);
+    vi.spyOn(isElectron, 'isElectron').mockImplementation(() => false);
 
     windowSpy.mockImplementation(() => ({
       headlampBaseUrl: '.',
@@ -66,6 +94,6 @@ describe('getAppUrl', () => {
         origin: 'http://example.com:4466',
       },
     }));
-    expect(helpers.getAppUrl()).toBe('http://example.com:4466/');
+    expect(getAppUrl.getAppUrl()).toBe('http://example.com:4466/');
   });
 });

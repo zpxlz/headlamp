@@ -1,85 +1,71 @@
-import { Icon } from '@iconify/react';
-import {
-  ListItemIcon,
-  ListSubheader,
-  MenuItem,
-  MenuList,
-  Popover,
-  useMediaQuery,
-} from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
 import ListItemText from '@mui/material/ListItemText';
+import ListSubheader from '@mui/material/ListSubheader';
+import MenuItem from '@mui/material/MenuItem';
+import MenuList from '@mui/material/MenuList';
+import Popover from '@mui/material/Popover';
 import { useTheme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
-import makeStyles from '@mui/styles/makeStyles';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { generatePath } from 'react-router';
 import { useHistory } from 'react-router-dom';
-import helpers from '../../helpers';
-import { useCluster, useClustersConf } from '../../lib/k8s';
+import { getClusterAppearanceFromMeta } from '../../helpers/clusterAppearance';
+import { isElectron } from '../../helpers/isElectron';
+import { getRecentClusters, setRecentCluster } from '../../helpers/recentClusters';
+import { useClustersConf, useSelectedClusters } from '../../lib/k8s';
 import { Cluster } from '../../lib/k8s/cluster';
-import { createRouteURL } from '../../lib/router';
+import { createRouteURL } from '../../lib/router/createRouteURL';
 import { getCluster, getClusterPrefixedPath } from '../../lib/util';
-
-const useStyles = makeStyles(theme => ({
-  button: {
-    backgroundColor: theme.palette.sidebarBg,
-    color: theme.palette.primary.contrastText,
-    '&:hover': {
-      color: theme.palette.text.primary,
-    },
-    width: '100%',
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: 0,
-    textTransform: 'none',
-  },
-  list: {
-    width: '280px',
-    minWidth: '280px',
-    minHeight: '200px',
-    maxHeight: '50vh',
-    overflowY: 'auto',
-    position: 'relative',
-
-    '& .MuiListItemIcon-root': {
-      minWidth: 0,
-      paddingRight: theme.spacing(2),
-    },
-    '& .MuiListItem-gutters': {
-      paddingLeft: 0,
-    },
-  },
-  recentClustersSubheader: {
-    paddingLeft: 0,
-    lineHeight: theme.typography.pxToRem(24),
-  },
-  popover: {
-    marginTop: '-5px',
-  },
-}));
+import ClusterBadge from '../Sidebar/ClusterBadge';
 
 function ClusterListItem(props: { cluster: Cluster; onClick: () => void; selected?: boolean }) {
   const { cluster, selected, onClick } = props;
   const { t } = useTranslation();
-  const theme = useTheme();
+  const appearance = getClusterAppearanceFromMeta(cluster?.name || '');
 
   return (
     <MenuItem
       selected={selected}
+      aria-selected={!!cluster.isCurrent}
       key={`recent_cluster_${cluster.name}`}
       onClick={onClick}
       id={cluster.name}
+      role="option"
+      sx={theme => ({
+        borderRadius: theme.shape.borderRadius + 'px',
+      })}
     >
-      <ListItemIcon>
-        <Icon icon="mdi:kubernetes" width={26} color={theme.palette.text.primary} />
-      </ListItemIcon>
-      <ListItemText
-        primary={cluster.name}
-        secondary={!!cluster.isCurrent ? t('Current', { context: 'cluster' }) : ''}
+      <ClusterBadge
+        name={cluster.name}
+        icon={appearance.icon}
+        accentColor={appearance.accentColor}
       />
+      {!!cluster.isCurrent && (
+        <ListItemText
+          secondary={t('Current', { context: 'cluster' })}
+          sx={{ marginLeft: 'auto', paddingLeft: 2 }}
+        />
+      )}
     </MenuItem>
   );
 }
@@ -101,17 +87,16 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
   const [filter, setFilter] = React.useState('');
   const clusters = useClustersConf();
   const history = useHistory();
-  const classes = useStyles();
   const theme = useTheme();
   const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [activeDescendantIndex, setActiveDescendantIndex] = React.useState<number>(-1);
 
-  const focusedRef = React.useCallback(node => {
+  const focusedRef = React.useCallback((node: HTMLElement) => {
     if (node !== null) {
       node.focus();
     }
   }, []);
-  const currentCluster = useCluster();
+  const selectedClusters = useSelectedClusters();
 
   function handleClose() {
     setFilter('');
@@ -124,17 +109,19 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
   const [recentClusters, clustersToShow] = React.useMemo(() => {
     let allClusters = Object.values(clusters || {});
     if (filter !== '') {
-      allClusters = allClusters.filter(cluster => cluster.name.includes(filter));
+      allClusters = allClusters.filter(cluster =>
+        cluster.name.toLowerCase().includes(filter.toLowerCase())
+      );
     }
 
-    const recentClustersNames = !!filter ? [] : helpers.getRecentClusters();
+    const recentClustersNames = !!filter ? [] : getRecentClusters();
 
     const clustersToShow: Cluster[] = [];
     const recentClusters: Cluster[] = [];
 
     allClusters.forEach(c => {
       const cluster = { ...c };
-      if (c.name === currentCluster) {
+      if (selectedClusters.includes(c.name)) {
         cluster.isCurrent = true;
       }
 
@@ -166,7 +153,8 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
     });
 
     return [recentClusters, clustersToShow];
-  }, [clusters, currentCluster, filter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusters, selectedClusters.join(','), filter]);
 
   React.useEffect(() => {
     setActiveDescendantIndex(-1);
@@ -176,7 +164,7 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
     handleClose();
 
     if (cluster.name !== getCluster()) {
-      helpers.setRecentCluster(cluster);
+      setRecentCluster(cluster);
       history.push({
         pathname: generatePath(getClusterPrefixedPath(), {
           cluster: cluster.name,
@@ -195,6 +183,7 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
     return {
       'aria-activedescendant': cluster.name,
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDescendantIndex]);
 
   function getActiveDescendantCluster() {
@@ -209,15 +198,29 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     switch (e.key) {
       case 'ArrowUp': {
-        setActiveDescendantIndex(
-          idx => (idx - 1) % (recentClusters.length + clustersToShow.length)
-        );
+        setActiveDescendantIndex(idx => {
+          const total = recentClusters.length + clustersToShow.length;
+          if (total === 0) {
+            return -1;
+          }
+
+          if (idx <= 0) {
+            return total - 1;
+          }
+
+          return (idx - 1 + total) % total;
+        });
         break;
       }
       case 'ArrowDown': {
-        setActiveDescendantIndex(
-          idx => (idx + 1) % (recentClusters.length + clustersToShow.length)
-        );
+        setActiveDescendantIndex(idx => {
+          const total = recentClusters.length + clustersToShow.length;
+          if (total === 0) {
+            return -1;
+          }
+
+          return (idx + 1) % total;
+        });
         break;
       }
       case 'Enter': {
@@ -249,14 +252,17 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
       }}
       aria-labelledby="chooser-dialog-title"
       aria-busy={clusters === null}
-      className={classes.popover}
+      sx={{
+        marginTop: '-5px',
+      }}
       {...otherProps}
     >
-      <Box p={2}>
+      <Box p={2} pb={1}>
         <TextField
           label={t('Choose cluster')}
-          id="filled-size-small"
+          id="cluster-chooser-filter"
           placeholder={t('translation|Name')}
+          variant="outlined"
           size="small"
           fullWidth
           InputLabelProps={{ shrink: true }}
@@ -269,13 +275,43 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
           }}
           {...activeDescendantProp}
         />
-        <MenuList id="cluster-chooser-list" className={classes.list} dense>
+        <MenuList
+          id="cluster-chooser-list"
+          role="listbox"
+          // A listbox is an ARIA input field, so it needs its own name: reuse
+          // the filter field's label.
+          aria-labelledby="cluster-chooser-filter-label"
+          tabIndex={0}
+          sx={{
+            width: '280px',
+            minWidth: '280px',
+            minHeight: '200px',
+            maxHeight: '50vh',
+            overflowY: 'auto',
+            position: 'relative',
+            '& .MuiListItemIcon-root': {
+              minWidth: 0,
+              paddingRight: theme.spacing(2),
+            },
+            '& .MuiListItem-gutters': {
+              paddingLeft: 0,
+            },
+          }}
+          dense
+        >
           {recentClusters.length > 0 && (
             <>
               {
                 // We only show the subheader if the recent clusters list is not all the clusters we have.
                 clustersToShow.length > 0 && (
-                  <ListSubheader disableSticky className={classes.recentClustersSubheader}>
+                  <ListSubheader
+                    disableSticky
+                    role="presentation"
+                    sx={{
+                      paddingLeft: 0,
+                      lineHeight: theme.typography.pxToRem(24),
+                    }}
+                  >
                     {t('Recent clusters')}
                   </ListSubheader>
                 )
@@ -290,7 +326,7 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
               ))}
             </>
           )}
-          {clustersToShow.length > 0 && recentClusters.length > 0 && <Divider />}
+          {clustersToShow.length > 0 && recentClusters.length > 0 && <Divider role="separator" />}
           {clustersToShow.map(cluster => (
             <ClusterListItem
               key={`cluster_button_${cluster.name}`}
@@ -301,10 +337,23 @@ function ClusterChooserPopup(props: ChooserPopupPros) {
           ))}
         </MenuList>
       </Box>
-      {helpers.isElectron() && (
+      {isElectron() && (
         <>
           <Button
-            className={classes.button}
+            sx={theme => ({
+              backgroundColor: theme.palette.sidebarBg,
+              color:
+                theme.palette.mode === 'dark'
+                  ? theme.palette.text.primary
+                  : theme.palette.primary.contrastText,
+              '&:hover': {
+                color: theme.palette.text.secondary,
+              },
+              width: '100%',
+              borderTopLeftRadius: 0,
+              borderTopRightRadius: 0,
+              textTransform: 'none',
+            })}
             onClick={() => history.push(createRouteURL('loadKubeConfig'))}
           >
             {t('translation|Add Cluster')}

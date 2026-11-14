@@ -1,8 +1,25 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { useTranslation } from 'react-i18next';
 import { KubeContainer } from '../../lib/k8s/cluster';
 import ReplicaSet from '../../lib/k8s/replicaSet';
-import { LightTooltip } from '../common';
+import { MetadataDictGrid } from '../common/Resource';
 import ResourceListView from '../common/Resource/ResourceListView';
+import LightTooltip from '../common/Tooltip/TooltipLight';
 
 export default function ReplicaSetList() {
   const { t } = useTranslation(['glossary', 'translation']);
@@ -14,38 +31,40 @@ export default function ReplicaSetList() {
       columns={[
         'name',
         'namespace',
+        'cluster',
         {
           id: 'generation',
           label: t('Generation'),
-          getter: replicaSet => replicaSet?.status?.observedGeneration,
-          sort: true,
+          getValue: replicaSet => replicaSet?.status?.observedGeneration,
           show: false,
         },
         {
           id: 'currentReplicas',
           label: t('translation|Current', { context: 'replicas' }),
-          getter: replicaSet => replicaSet?.status?.replicas || 0,
+          getValue: replicaSet => replicaSet?.status?.replicas || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'desiredReplicas',
           label: t('translation|Desired', { context: 'replicas' }),
-          getter: replicaSet => replicaSet?.spec?.replicas || 0,
+          getValue: replicaSet => replicaSet?.spec?.replicas || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'readyReplicas',
           label: t('translation|Ready'),
-          getter: replicaSet => replicaSet?.status?.readyReplicas || 0,
+          getValue: replicaSet => replicaSet?.status?.readyReplicas || 0,
           gridTemplate: 0.6,
-          sort: true,
         },
         {
           id: 'containers',
           label: t('Containers'),
-          getter: replicaSet => {
+          getValue: replicaSet =>
+            replicaSet
+              .getContainers()
+              .map(c => c.name)
+              .join(''),
+          render: replicaSet => {
             const containerText = replicaSet
               .getContainers()
               .map((c: KubeContainer) => c.name)
@@ -56,22 +75,16 @@ export default function ReplicaSetList() {
               </LightTooltip>
             );
           },
-          sort: (rs1, rs2) => {
-            const containers1 = rs1
-              .getContainers()
-              .map((c: KubeContainer) => c.name)
-              .join('');
-            const containers2 = rs2
-              .getContainers()
-              .map((c: KubeContainer) => c.name)
-              .join('');
-            return containers1.localeCompare(containers2);
-          },
         },
         {
           id: 'images',
           label: t('Images'),
-          getter: replicaSet => {
+          getValue: replicaSet =>
+            replicaSet
+              .getContainers()
+              .map((c: KubeContainer) => c.image)
+              .join(''),
+          render: replicaSet => {
             const imageText = replicaSet
               .getContainers()
               .map((c: KubeContainer) => c.image)
@@ -82,33 +95,17 @@ export default function ReplicaSetList() {
               </LightTooltip>
             );
           },
-          sort: (rs1, rs2) => {
-            const images1 = rs1
-              .getContainers()
-              .map((c: KubeContainer) => c.image)
-              .join('');
-            const images2 = rs2
-              .getContainers()
-              .map((c: KubeContainer) => c.image)
-              .join('');
-            return images1.localeCompare(images2);
-          },
         },
         {
           id: 'selector',
           label: t('Selector'),
-          getter: replicaSet => {
-            const selectorText = replicaSet.getMatchLabelsList().join('\n');
-            return (
-              selectorText && (
-                <LightTooltip title={selectorText} interactive>
-                  {selectorText}
-                </LightTooltip>
-              )
-            );
+          getValue: replicaSet => replicaSet.getMatchLabelsList().join(''),
+          render: replicaSet => {
+            const matchLabels = replicaSet.spec.selector?.matchLabels;
+            return matchLabels && <MetadataDictGrid dict={matchLabels} />;
           },
-          sort: true,
         },
+        'labels',
         'age',
       ]}
     />

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { ConfigStore } from '@kinvolk/headlamp-plugin/lib';
 import { NameValueTable } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import Box from '@mui/material/Box';
@@ -18,9 +34,10 @@ import { useEffect, useState } from 'react';
  * @param {string} [props.defaultValue=''] - The default value of the input.
  * @param {number} [props.delay=1000] - The delay in milliseconds before the onSave callback is invoked after the user stops typing.
  * @param {string} [props.helperText=''] - Optional helper text to display below the input.
+ * @param {string} [props.ariaLabel=''] - Optional accessibility label for the input.
  * @returns {JSX.Element} The AutoSaveInput component.
  */
-function AutoSaveInput({ onSave, defaultValue = '', delay = 1000, helperText = '' }) {
+function AutoSaveInput({ onSave, defaultValue = '', delay = 1000, helperText = '', ariaLabel = '' }) {
   const [value, setValue] = useState(defaultValue);
   const [timer, setTimer] = useState(null);
 
@@ -53,6 +70,7 @@ function AutoSaveInput({ onSave, defaultValue = '', delay = 1000, helperText = '
         shrink: true,
         style: { display: 'none' },
       }}
+      inputProps={ariaLabel ? { 'aria-label': ariaLabel } : {}}
       helperText={helperText}
       value={value}
       onChange={handleChange}
@@ -105,6 +123,7 @@ export default function Settings() {
           onSave={handleSave}
           delay={1000}
           helperText={'Enter the URL of your logo.'}
+          ariaLabel="Logo URL"
         />
       ),
     },

@@ -1,60 +1,92 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
-import {
-  Box,
-  Button,
-  FormControl,
-  IconButton,
-  ListItemSecondaryAction,
-  ListItemText,
-  MenuItem,
-  Select,
-  SelectChangeEvent,
-  TextField,
-} from '@mui/material';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import FormControl from '@mui/material/FormControl';
+import IconButton from '@mui/material/IconButton';
+import ListItemSecondaryAction from '@mui/material/ListItemSecondaryAction';
+import ListItemText from '@mui/material/ListItemText';
+import MenuItem from '@mui/material/MenuItem';
+import { SelectChangeEvent } from '@mui/material/Select';
+import Select from '@mui/material/Select';
+import TextField from '@mui/material/TextField';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch } from 'react-redux';
-import helpers from '../../../helpers';
+import {
+  getTablesRowsPerPage,
+  maxTablesRowsPerPage,
+  minTablesRowsPerPage,
+  parseTablesRowsPerPage,
+  setTablesRowsPerPage,
+} from '../../../helpers/tablesRowsPerPage';
 import { defaultTableRowsPerPageOptions, setAppSettings } from '../../../redux/configSlice';
 
-export default function NumRowsInput(props: { defaultValue: number[] }) {
-  const { t } = useTranslation(['frequent', 'settings']);
-  const { defaultValue } = props;
+export default function NumRowsInput(props: {
+  defaultValue: number[];
+  nameLabelID?: string;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation(['frequent']);
+  const { defaultValue, nameLabelID, disabled } = props;
   const [isSelectOpen, setIsSelectOpen] = useState(false);
   const [options, setOptions] = useState(defaultValue);
-  const focusedRef = useCallback(node => {
+  const [minRows, maxRows] = [minTablesRowsPerPage, maxTablesRowsPerPage];
+  const focusedRef = useCallback((node: HTMLElement) => {
     if (node !== null) {
       node.focus();
     }
   }, []);
-  const defaultRowsPerPageValue = useMemo(() => {
-    const val = helpers.getTablesRowsPerPage();
-    if (options.includes(val)) {
+  const [selectedValue, setSelectedValue] = useState(() => {
+    const val = getTablesRowsPerPage();
+    if (defaultValue.includes(val)) {
       return val;
     }
     return defaultTableRowsPerPageOptions[0];
-  }, []);
-  const [selectedValue, setSelectedValue] = useState(defaultRowsPerPageValue);
-  const storedCustomValue = useMemo(() => {
-    const val = options.find(val => !defaultTableRowsPerPageOptions.includes(val));
+  });
+  const [customValue, setCustomValue] = useState(() => {
+    const val = defaultValue.find(val => !defaultTableRowsPerPageOptions.includes(val));
     if (!val) {
-      return defaultTableRowsPerPageOptions[0];
+      return defaultTableRowsPerPageOptions[0].toString();
     }
-    return val;
-  }, []);
-  const [customValue, setCustomValue] = useState<number | undefined>(storedCustomValue);
+    return val.toString();
+  });
   const [errorMessage, setErrorMessage] = useState('');
-  const [minRows, maxRows] = [5, 1000];
   const dispatch = useDispatch();
 
+  // Sync local options when the admin-resolved defaultValue changes
+  // (e.g. after admin settings load asynchronously).
   useEffect(() => {
-    dispatch(setAppSettings({ tableRowsPerPageOptions: options }));
-  }, [options]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOptions(defaultValue);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedValue(prev => (defaultValue.includes(prev) || prev === -1 ? prev : defaultValue[0]));
+  }, [defaultValue]);
+
+  function updateOptions(newOptions: number[]) {
+    setOptions(newOptions);
+    dispatch(setAppSettings({ tableRowsPerPageOptions: newOptions }));
+  }
 
   // Make sure we update the value in the localStorage when the user selects a new value.
   useEffect(() => {
     if (selectedValue !== -1) {
-      helpers.setTablesRowsPerPage(selectedValue);
+      setTablesRowsPerPage(selectedValue);
     }
   }, [selectedValue]);
 
@@ -86,35 +118,35 @@ export default function NumRowsInput(props: { defaultValue: number[] }) {
           error={!!errorMessage}
           placeholder={t('translation|Custom row value')}
           helperText={errorMessage || suggestionMsg}
-          inputProps={{ min: minRows, max: maxRows }}
+          inputProps={{ min: minRows, max: maxRows, step: 1 }}
           inputRef={focusedRef}
           onChange={e => {
-            const val = parseInt(e.target.value);
-            if (Number.isInteger(val)) {
-              if (val < 5 || val > maxRows) {
-                setErrorMessage(suggestionMsg);
-              } else {
-                setErrorMessage('');
-              }
-              setCustomValue(val);
-            } else {
-              setCustomValue(undefined);
+            const val = parseTablesRowsPerPage(e.target.value);
+            setCustomValue(e.target.value);
+            if (val === null) {
+              setErrorMessage(e.target.value ? suggestionMsg : '');
+              return;
             }
+
+            setErrorMessage('');
           }}
         />
         <Box display="inline-flex" alignItems="center" mx={1}>
           <Button
             variant="contained"
-            disabled={!!errorMessage}
+            disabled={!!errorMessage || parseTablesRowsPerPage(customValue) === null}
             size="small"
             onClick={() => {
-              if (customValue === undefined) {
+              const parsedCustomValue = parseTablesRowsPerPage(customValue);
+              if (parsedCustomValue === null) {
                 return;
               }
-              const newOptions = [...new Set([...defaultTableRowsPerPageOptions, customValue])];
+              const newOptions = [
+                ...new Set([...defaultTableRowsPerPageOptions, parsedCustomValue]),
+              ];
               newOptions.sort((a, b) => a - b);
-              setOptions(newOptions);
-              setSelectedValue(customValue);
+              updateOptions(newOptions);
+              setSelectedValue(parsedCustomValue);
             }}
           >
             {t('translation|Apply')}
@@ -122,7 +154,7 @@ export default function NumRowsInput(props: { defaultValue: number[] }) {
           <IconButton
             aria-label={t('translation|Delete')}
             onClick={() => {
-              setOptions(defaultTableRowsPerPageOptions);
+              updateOptions(defaultTableRowsPerPageOptions);
               setSelectedValue(defaultTableRowsPerPageOptions[0]);
             }}
             size="medium"
@@ -132,15 +164,19 @@ export default function NumRowsInput(props: { defaultValue: number[] }) {
         </Box>
       </Box>
     ) : (
-      <FormControl>
+      <FormControl disabled={disabled}>
         <Select
           value={selectedValue}
           style={{ width: '100px' }}
+          disabled={disabled}
           open={isSelectOpen}
           onClose={handleClose}
           onOpen={handleOpen}
           onChange={handleChange}
           renderValue={value => `${value}`}
+          size="small"
+          variant="outlined"
+          labelId={nameLabelID}
         >
           {options.map(option => {
             const isCustom = !defaultTableRowsPerPageOptions.includes(option);
@@ -153,7 +189,7 @@ export default function NumRowsInput(props: { defaultValue: number[] }) {
                       size="small"
                       aria-label={t('translation|Delete')}
                       onClick={() => {
-                        setOptions(defaultTableRowsPerPageOptions);
+                        updateOptions(defaultTableRowsPerPageOptions);
                         setSelectedValue(defaultTableRowsPerPageOptions[0]);
                         setIsSelectOpen(false);
                       }}

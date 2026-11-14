@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 /**
  * Runs a shell command and returns an object that mimics the interface of a ChildProcess object returned by Node's spawn function.
  *
@@ -8,11 +24,20 @@
  * This function uses the desktopApi.send and desktopApi.receive methods to communicate with the main process.
  * @param command - The command to run.
  * @param args - An array of arguments to pass to the command.
+ * @param options - Additional options for the command.
+ * @param permissionSecrets - Internal use. A record of permission secrets that may be required for the command.
+ * @param desktopApiSend - Internal use. The function to send data to the main process.
+ * @param desktopApiReceive - Internal use. The function to receive data from the main process.
+ * @param capability - Opaque product authorization for the calling plugin.
  * @returns An object with `stdout`, `stderr`, and `on` properties. You can listen for 'data' events on `stdout` and `stderr`, and 'exit' events with `on`.
  * @example
  *
+ * How it can be used in a plugin:
  * ```ts
- *   const minikube = runCommand('minikube', ['status']);
+ *   import type { PluginRunCommand } from '@kinvolk/headlamp-plugin/lib';
+ *   declare const pluginRunCommand: PluginRunCommand;
+ *   const minikube = pluginRunCommand('minikube', ['status'], {});
+ *
  *   minikube.stdout.on('data', (data) => {
  *     console.log('stdout:', data);
  *   });
@@ -24,10 +49,33 @@
  *   });
  * ```
  */
-export function runCommand(
-  command: 'minikube' | 'az',
+export type PluginRunCommand = (
+  command: string,
   args: string[],
-  options: {}
+  options: Record<string, never>
+) => ReturnType<typeof runCommand>;
+
+export function runCommand(
+  command: string,
+  args: string[],
+  options: {},
+  permissionSecrets?: Record<string, number>,
+  desktopApiSend?: (
+    channel: string,
+    data: {
+      id: string;
+      command: string;
+      args: string[];
+      options: {};
+      permissionSecrets: Record<string, number>;
+      capability?: string;
+    }
+  ) => void,
+  desktopApiReceive?: (
+    channel: string,
+    listener: (cmdId: string, data: string | number) => void
+  ) => (() => void) | void,
+  capability?: string
 ): {
   stdout: { on: (event: string, listener: (chunk: any) => void) => void };
   stderr: { on: (event: string, listener: (chunk: any) => void) => void };
@@ -36,9 +84,12 @@ export function runCommand(
   if (!window.desktopApi) {
     throw new Error('runCommand only works in Headlamp app mode.');
   }
-
-  if (process.env.REACT_APP_ENABLE_RUN_CMD !== 'true') {
-    throw new Error('Running commands is disabled.');
+  if (!desktopApiSend || !desktopApiReceive || !permissionSecrets) {
+    // these are only optional for the pluginRunCommand
+    throw new Error(
+      'Do not use runCommand directly. Use pluginRunCommand via:' +
+        '  `declare const pluginRunCommand: PluginRunCommand;`'
+    );
   }
 
   // Generate a unique ID for the command, so that we can distinguish between
@@ -46,30 +97,49 @@ export function runCommand(
   const id = `${new Date().getTime()}-${Math.random().toString(36)}`;
 
   const stdout = new EventTarget();
+  const removeStdout = desktopApiReceive(
+    'command-stdout',
+    (cmdId: string, data: string | number) => {
+      if (cmdId === id) {
+        const event = new CustomEvent('data', { detail: data });
+        stdout.dispatchEvent(event);
+      }
+    }
+  );
+
   const stderr = new EventTarget();
+  const removeStderr = desktopApiReceive(
+    'command-stderr',
+    (cmdId: string, data: string | number) => {
+      if (cmdId === id) {
+        const event = new CustomEvent('data', { detail: data });
+        stderr.dispatchEvent(event);
+      }
+    }
+  );
+
   const exit = new EventTarget();
-
-  window.desktopApi.send('run-command', { id, command, args, options });
-
-  window.desktopApi.receive('command-stdout', (cmdId: string, data: string) => {
+  const removeExit = desktopApiReceive('command-exit', (cmdId: string, code: string | number) => {
     if (cmdId === id) {
-      const event = new CustomEvent('data', { detail: data });
-      stdout.dispatchEvent(event);
-    }
-  });
+      removeStdout?.();
+      removeStderr?.();
+      removeExit?.();
 
-  window.desktopApi.receive('command-stderr', (cmdId: string, data: string) => {
-    if (cmdId === id) {
-      const event = new CustomEvent('data', { detail: data });
-      stderr.dispatchEvent(event);
-    }
-  });
-
-  window.desktopApi.receive('command-exit', (cmdId: string, code: number) => {
-    if (cmdId === id) {
       const event = new CustomEvent('exit', { detail: code });
       exit.dispatchEvent(event);
     }
+  });
+
+  // We use desktopApiReceive and desktopApiSend to communicate with the main process.
+  // Because other plugins may change the global window.desktopApi functions
+  // to snoop on the secrets that plugins are sending.
+  desktopApiSend('run-command', {
+    id,
+    command,
+    args,
+    options,
+    permissionSecrets,
+    ...(capability && { capability }),
   });
 
   return {

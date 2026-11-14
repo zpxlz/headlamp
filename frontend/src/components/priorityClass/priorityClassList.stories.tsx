@@ -1,32 +1,43 @@
-import { Meta, Story } from '@storybook/react';
-import PriorityClass, { KubePriorityClass } from '../../lib/k8s/priorityClass';
-import { TestContext } from '../../test';
-import { generateK8sResourceList } from '../../test/mocker';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import PriorityClassList from './List';
 
-PriorityClass.useList = () => {
-  const objList = generateK8sResourceList<KubePriorityClass>(
-    {
-      description: 'Mission Critical apps.',
-      kind: 'PriorityClass',
-      metadata: {
-        annotations: {
-          'kubectl.kubernetes.io/last-applied-configuration':
-            '{"apiVersion":"scheduling.k8s.io/v1","description":"Mission Critical apps.","globalDefault":false,"kind":"PriorityClass","metadata":{"annotations":{},"name":"high-priority-apps"},"preemptionPolicy":"PreemptLowerPriority","value":1000000}\n',
-        },
-        creationTimestamp: '2022-10-26T13:46:17Z',
-        generation: 1,
-        name: 'high-priority-apps',
-        resourceVersion: '6474045',
-        uid: '4cfbe956-a997-4b58-8ea3-18655d0ba8a9',
+const items = [
+  {
+    description: 'Mission Critical apps.',
+    kind: 'PriorityClass',
+    metadata: {
+      annotations: {
+        'kubectl.kubernetes.io/last-applied-configuration':
+          '{"apiVersion":"scheduling.k8s.io/v1","description":"Mission Critical apps.","globalDefault":false,"kind":"PriorityClass","metadata":{"annotations":{},"name":"high-priority-apps"},"preemptionPolicy":"PreemptLowerPriority","value":1000000}\n',
       },
-      preemptionPolicy: 'PreemptLowerPriority',
-      value: 1000000,
+      creationTimestamp: '2022-10-26T13:46:17Z',
+      generation: 1,
+      name: 'high-priority-apps',
+      resourceVersion: '6474045',
+      uid: '4cfbe956-a997-4b58-8ea3-18655d0ba8a9',
     },
-    { instantiateAs: PriorityClass }
-  );
-  return [objList, null, () => {}, () => {}] as any;
-};
+    preemptionPolicy: 'PreemptLowerPriority',
+    value: 1000000,
+  },
+];
 
 export default {
   title: 'PriorityClass/PriorityClassListView',
@@ -43,8 +54,23 @@ export default {
   ],
 } as Meta;
 
-const Template: Story = () => {
+const Template: StoryFn = () => {
   return <PriorityClassList />;
 };
 
 export const Items = Template.bind({});
+Items.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(`${API_BASE}/apis/scheduling.k8s.io/v1/priorityclasses`, () =>
+          HttpResponse.json({
+            kind: 'PriorityClassList',
+            items,
+            metadata: {},
+          })
+        ),
+      ],
+    },
+  },
+};

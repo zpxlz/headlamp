@@ -1,3 +1,19 @@
+/*
+Copyright 2025 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package helm
 
 import (
@@ -6,8 +22,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/headlamp-k8s/headlamp/backend/pkg/cache"
-	"github.com/headlamp-k8s/headlamp/backend/pkg/logger"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/cache"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/logger"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/cli"
@@ -27,7 +43,6 @@ var (
 )
 
 type Handler struct {
-	*action.Configuration
 	*cli.EnvSettings
 	Cache cache.Cache[interface{}]
 }
@@ -40,7 +55,7 @@ func NewActionConfig(clientConfig clientcmd.ClientConfig, namespace string) (*ac
 	}
 	logger := func(format string, a ...interface{}) {
 		logger.Log(logger.LevelInfo, map[string]string{"namespace": namespace},
-			nil, format+"\n"+fmt.Sprintf("%v", a))
+			nil, fmt.Sprintf(format, a...))
 	}
 
 	err := actionConfig.Init(restConfGetter, namespace, "secret", logger)
@@ -51,28 +66,15 @@ func NewActionConfig(clientConfig clientcmd.ClientConfig, namespace string) (*ac
 	return actionConfig, nil
 }
 
-func NewHandler(clientConfig clientcmd.ClientConfig,
-	cache cache.Cache[interface{}], namespace string,
+func NewHandler(cache cache.Cache[interface{}],
 ) (*Handler, error) {
-	return NewHandlerWithSettings(clientConfig, cache, namespace, settings)
+	return NewHandlerWithSettings(cache, settings)
 }
 
-func NewHandlerWithSettings(clientConfig clientcmd.ClientConfig,
-	cache cache.Cache[interface{}],
-	namespace string, settings *cli.EnvSettings,
-) (*Handler, error) {
-	actionConfig, err := NewActionConfig(clientConfig, namespace)
-	if err != nil {
-		logger.Log(logger.LevelError, map[string]string{"namespace": namespace},
-			err, "unable to create action config")
-
-		return nil, err
-	}
-
+func NewHandlerWithSettings(cache cache.Cache[interface{}], settings *cli.EnvSettings) (*Handler, error) {
 	return &Handler{
-		Configuration: actionConfig,
-		EnvSettings:   settings,
-		Cache:         cache,
+		EnvSettings: settings,
+		Cache:       cache,
 	}, nil
 }
 
@@ -188,7 +190,7 @@ func (h *Handler) setReleaseStatus(actionName, releaseName, status string, err e
 func (h *Handler) setReleaseStatusSilent(actionName, releaseName, status string, err error) {
 	cacheErr := h.setReleaseStatus(actionName, releaseName, status, err)
 	if cacheErr != nil {
-		logger.Log(logger.LevelError, map[string]string{"releaseName": releaseName, "status": status},
+		logger.Log(logger.LevelError, map[string]string{logFieldReleaseName: releaseName, "status": status},
 			cacheErr, "unable to set status")
 	}
 }

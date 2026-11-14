@@ -1,14 +1,25 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
-import { Box, IconButton } from '@mui/material';
-import makeStyles from '@mui/styles/makeStyles';
+import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-
-const useStyles = makeStyles({
-  fullText: {
-    wordBreak: 'break-all',
-  },
-});
+import { useId } from '../../../lib/util';
 
 export interface ShowHideLabelProps {
   children: string;
@@ -21,15 +32,9 @@ export default function ShowHideLabel(props: ShowHideLabelProps) {
   const { show = false, labelId = '', maxChars = 256, children } = props;
   const { t } = useTranslation();
   const [expanded, setExpanded] = React.useState(show);
-  const classes = useStyles();
+  const generatedId = useId('show-hide-label-');
 
-  const labelIdOrRandom = React.useMemo(() => {
-    if (!!labelId || !!process.env.UNDER_TEST) {
-      return labelId;
-    }
-
-    return `${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 5)}`;
-  }, [labelId]);
+  const labelIdOrRandom = labelId || generatedId;
 
   const [actualText, needsButton] = React.useMemo(() => {
     if (typeof children !== 'string') {
@@ -40,36 +45,32 @@ export default function ShowHideLabel(props: ShowHideLabelProps) {
       return [children, true];
     }
 
-    return [children.substr(0, maxChars), children.length > maxChars];
-  }, [children, expanded]);
+    return [children.slice(0, Math.max(0, maxChars)), children.length > maxChars];
+  }, [children, expanded, maxChars]);
 
   if (!children) {
     return null;
   }
 
   return (
-    <Box display={expanded ? 'block' : 'flex'}>
-      <label
-        id={labelIdOrRandom}
-        className={classes.fullText}
-        aria-expanded={!needsButton ? undefined : expanded}
-      >
+    <Box display="block">
+      <span id={labelIdOrRandom} style={{ wordBreak: 'break-all', whiteSpace: 'normal' }}>
         {actualText}
-        {needsButton && (
-          <>
-            {!expanded && '…'}
-            <IconButton
-              aria-controls={labelIdOrRandom}
-              sx={{ display: 'inline' }}
-              onClick={() => setExpanded(expandedVal => !expandedVal)}
-              size="small"
-              arial-label={expanded ? t('translation|Collapse') : t('translation|Expand')}
-            >
-              <Icon icon={expanded ? 'mdi:menu-up' : 'mdi:menu-down'} />
-            </IconButton>
-          </>
-        )}
-      </label>
+        {!expanded && needsButton && '…'}
+      </span>
+
+      {needsButton && (
+        <IconButton
+          aria-controls={labelIdOrRandom}
+          aria-expanded={expanded}
+          sx={{ display: 'inline' }}
+          onClick={() => setExpanded(expandedVal => !expandedVal)}
+          size="small"
+          aria-label={expanded ? t('translation|Collapse') : t('translation|Expand')}
+        >
+          <Icon icon={expanded ? 'mdi:menu-up' : 'mdi:menu-down'} />
+        </IconButton>
+      )}
     </Box>
   );
 }

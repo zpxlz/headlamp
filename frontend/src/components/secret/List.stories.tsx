@@ -1,15 +1,24 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Meta, StoryFn } from '@storybook/react';
-import { KubeObject } from '../../lib/k8s/cluster';
-import Secret from '../../lib/k8s/secret';
-import { TestContext } from '../../test';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import ListView from './List';
 import { BASE_EMPTY_SECRET, BASE_SECRET } from './storyHelper';
-
-Secret.useList = () => {
-  const objList = [BASE_EMPTY_SECRET, BASE_SECRET].map((data: KubeObject) => new Secret(data));
-
-  return [objList, null, () => {}, () => {}] as any;
-};
 
 export default {
   title: 'Secret/ListView',
@@ -31,3 +40,18 @@ const Template: StoryFn = () => {
 };
 
 export const Items = Template.bind({});
+Items.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(`${API_BASE}/api/v1/secrets`, () =>
+          HttpResponse.json({
+            kind: 'SecretList',
+            items: [BASE_EMPTY_SECRET, BASE_SECRET],
+            metadata: {},
+          })
+        ),
+      ],
+    },
+  },
+};

@@ -1,15 +1,29 @@
-import {
-  createAction,
-  createListenerMiddleware,
-  createSlice,
-  PayloadAction,
-} from '@reduxjs/toolkit';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { createAction, createListenerMiddleware, createSlice } from '@reduxjs/toolkit';
 import { useDispatch } from 'react-redux';
-import { KubeObject } from '../lib/k8s/cluster';
-import Event from '../lib/k8s/event';
-import Pod from '../lib/k8s/pod';
-import { Plugin } from '../plugin/lib';
-import { RootState } from './reducers/reducers';
+import type Event from '../lib/k8s/event';
+import type { KubeObject } from '../lib/k8s/KubeObject';
+import type Pod from '../lib/k8s/pod';
+import type { Plugin } from '../plugin/lib';
+import type { PluginInfo } from '../plugin/pluginsSlice';
+import type { ProjectDefinition, ProjectDetailsTab } from './projectsSlice';
+import type { RootState } from './reducers/reducers';
 
 /**
  * The types of default events that can be tracked.
@@ -19,14 +33,22 @@ export enum HeadlampEventType {
   ERROR_BOUNDARY = 'headlamp.error-boundary',
   /** Events related to deleting a resource. */
   DELETE_RESOURCE = 'headlamp.delete-resource',
+  /** Events related to deleting multiple resources. */
+  DELETE_RESOURCES = 'headlamp.delete-resources',
   /** Events related to creating a resource. */
   CREATE_RESOURCE = 'headlamp.create-resource',
   /** Events related to editing a resource. */
   EDIT_RESOURCE = 'headlamp.edit-resource',
   /** Events related to scaling a resource. */
   SCALE_RESOURCE = 'headlamp.scale-resource',
+  /** Events related to scaling multiple resources. */
+  SCALE_RESOURCES = 'headlamp.scale-resources',
   /** Events related to restarting a resource. */
   RESTART_RESOURCE = 'headlamp.restart-resource',
+  /** Events related to restarting multiple resources. */
+  RESTART_RESOURCES = 'headlamp.restart-resources',
+  /** Events related to rolling back a resource. */
+  ROLLBACK_RESOURCE = 'headlamp.rollback-resource',
   /** Events related to viewing logs. */
   LOGS = 'headlamp.logs',
   /** Events related to opening a terminal. */
@@ -43,6 +65,24 @@ export enum HeadlampEventType {
   LIST_VIEW = 'headlamp.list-view',
   /** Events related to loading events for a resource. */
   OBJECT_EVENTS = 'headlamp.object-events',
+  /** Events related to loading the project list view. */
+  PROJECT_LIST_VIEW = 'headlamp.project-list-view',
+  /** Events related to loading a project in the project details view. */
+  PROJECT_DETAILS_VIEW = 'headlamp.project-details-view',
+  /** Events related to switching tabs in the project details view. */
+  PROJECT_DETAILS_TAB_CHANGE = 'headlamp.project-details-tab-change',
+  /** Events related to creating a project. */
+  CREATE_PROJECT = 'headlamp.create-project',
+  /** Events related to deleting a project. */
+  DELETE_PROJECT = 'headlamp.delete-project',
+  /** Events related to loading the general settings view. */
+  SETTINGS_VIEW = 'headlamp.settings-view',
+  /** Events related to loading the cluster settings view. */
+  CLUSTER_SETTINGS_VIEW = 'headlamp.cluster-settings-view',
+  /** Events related to loading the plugin list in the settings view. */
+  PLUGIN_LIST_VIEW = 'headlamp.plugin-list-view',
+  /** Events related to loading a plugin's settings details view. */
+  PLUGIN_DETAILS_VIEW = 'headlamp.plugin-details-view',
 }
 
 /**
@@ -93,6 +133,20 @@ export interface DeleteResourceEvent extends HeadlampEvent<HeadlampEventType.DEL
 }
 
 /**
+ * Event fired when resources is to be deleted.
+ */
+export interface DeleteResourcesEvent extends HeadlampEvent<HeadlampEventType.DELETE_RESOURCES> {
+  data: {
+    /** Resources for which the deletion was called. */
+    resources: KubeObject[];
+    /** What exactly this event represents. 'CONFIRMED' when the user confirms the deletion of resources.
+     * For now only 'CONFIRMED' is sent.
+     */
+    status: EventStatus.CONFIRMED;
+  };
+}
+
+/**
  * Event fired when editing a resource.
  */
 export interface EditResourceEvent {
@@ -123,14 +177,57 @@ export interface ScaleResourceEvent {
 }
 
 /**
+ * Event fired when scaling multiple resources.
+ */
+export interface ScaleResourcesEvent extends HeadlampEvent<HeadlampEventType.SCALE_RESOURCES> {
+  data: {
+    /** The resources for which scaling was called. */
+    resources: KubeObject[];
+    /** The number of replicas set. */
+    numReplicas: number;
+    /** What exactly this event represents. 'CONFIRMED' when the user confirms scaling of resources.
+     * For now only 'CONFIRMED' is sent.
+     */
+    status: EventStatus.CONFIRMED;
+  };
+}
+
+/**
  * Event fired when restarting a resource.
  */
-export interface RestartResourceEvent {
-  type: HeadlampEventType.RESTART_RESOURCE;
+export interface RestartResourceEvent extends HeadlampEvent<HeadlampEventType.RESTART_RESOURCE> {
   data: {
-    /** The resource for which the deletion was called. */
+    /** The resource for which restart was called. */
     resource: KubeObject;
-    /** What exactly this event represents. 'CONFIRMED' when the restart is selected by the user.
+    /** What exactly this event represents. 'CONFIRMED' when restart is selected by the user.
+     * For now only 'CONFIRMED' is sent.
+     */
+    status: EventStatus.CONFIRMED;
+  };
+}
+
+/**
+ * Event fired when restarting multiple resources.
+ */
+export interface RestartResourcesEvent extends HeadlampEvent<HeadlampEventType.RESTART_RESOURCES> {
+  data: {
+    /** Resources for which restart was called. */
+    resources: KubeObject[];
+    /** What exactly this event represents. 'CONFIRMED' when the user confirms restart of resources.
+     * For now only 'CONFIRMED' is sent.
+     */
+    status: EventStatus.CONFIRMED;
+  };
+}
+
+/**
+ * Event fired when rolling back a resource (e.g., Deployment).
+ */
+export interface RollbackResourceEvent extends HeadlampEvent<HeadlampEventType.ROLLBACK_RESOURCE> {
+  data: {
+    /** The resource for which rollback was called. */
+    resource: KubeObject;
+    /** What exactly this event represents. 'CONFIRMED' when rollback is selected by the user.
      * For now only 'CONFIRMED' is sent.
      */
     status: EventStatus.CONFIRMED;
@@ -275,6 +372,120 @@ export interface EventListEvent {
   };
 }
 
+/**
+ * Event fired when the project list view is loaded.
+ */
+export interface ProjectListViewLoadedEvent
+  extends HeadlampEvent<HeadlampEventType.PROJECT_LIST_VIEW> {
+  data: {
+    /** The list of projects that were loaded. */
+    projects: ProjectDefinition[];
+  };
+}
+
+/**
+ * Event fired when a project is loaded in the project details view.
+ */
+export interface ProjectDetailsViewLoadedEvent
+  extends HeadlampEvent<HeadlampEventType.PROJECT_DETAILS_VIEW> {
+  data: {
+    /** The project that was loaded. */
+    project: ProjectDefinition;
+    /** The resources belonging to the project. */
+    resources: KubeObject[];
+  };
+}
+
+/**
+ * Event fired when the user switches to a different tab in the project details view.
+ */
+export interface ProjectDetailsTabChangeEvent
+  extends HeadlampEvent<HeadlampEventType.PROJECT_DETAILS_TAB_CHANGE> {
+  data: {
+    /** The project whose details view the tab belongs to. */
+    project: ProjectDefinition;
+    /** The tab that is now selected. */
+    tab: ProjectDetailsTab;
+    /** The tab that was selected before. */
+    previousTab: ProjectDetailsTab;
+    /** The resources belonging to the project. */
+    resources: KubeObject[];
+  };
+}
+
+/**
+ * Event fired when a project is to be created.
+ */
+export interface CreateProjectEvent extends HeadlampEvent<HeadlampEventType.CREATE_PROJECT> {
+  data: {
+    /** The project for which the creation was called. */
+    project: ProjectDefinition;
+    /** What exactly this event represents. 'CONFIRMED' when the user confirms the creation of a
+     * project. For now only 'CONFIRMED' is sent.
+     */
+    status: EventStatus.CONFIRMED;
+  };
+}
+
+/**
+ * Event fired when a project is to be deleted.
+ */
+export interface DeleteProjectEvent extends HeadlampEvent<HeadlampEventType.DELETE_PROJECT> {
+  data: {
+    /** The project for which the deletion was called. */
+    project: ProjectDefinition;
+    /** Whether the project's namespaces are deleted along with the project. */
+    deleteNamespaces: boolean;
+    /** What exactly this event represents. 'CONFIRMED' when the user confirms the deletion of a
+     * project. For now only 'CONFIRMED' is sent.
+     */
+    status: EventStatus.CONFIRMED;
+  };
+}
+
+/**
+ * Event fired when the general settings view is loaded.
+ */
+export interface SettingsViewLoadedEvent extends HeadlampEvent<HeadlampEventType.SETTINGS_VIEW> {
+  data: {
+    /** The name of the theme that is currently applied. */
+    theme: string;
+  };
+}
+
+/**
+ * Event fired when the cluster settings view is loaded.
+ */
+export interface ClusterSettingsViewLoadedEvent
+  extends HeadlampEvent<HeadlampEventType.CLUSTER_SETTINGS_VIEW> {
+  data: {
+    /** The cluster whose settings are being displayed. */
+    cluster: string;
+  };
+}
+
+/**
+ * Event fired when the plugin list is loaded in the settings view.
+ */
+export interface PluginListViewLoadedEvent
+  extends HeadlampEvent<HeadlampEventType.PLUGIN_LIST_VIEW> {
+  data: {
+    /** The plugins that were listed. */
+    plugins: PluginInfo[];
+  };
+}
+
+/**
+ * Event fired when a plugin's settings details view is loaded.
+ */
+export interface PluginDetailsViewLoadedEvent
+  extends HeadlampEvent<HeadlampEventType.PLUGIN_DETAILS_VIEW> {
+  data: {
+    /** The plugin whose details are being displayed. */
+    plugin: PluginInfo;
+  };
+}
+
 export type HeadlampEventCallback = (data: HeadlampEvent) => void;
 
 const initialState: {
@@ -289,8 +500,8 @@ export const listenerMiddleware =
   createListenerMiddleware<Pick<RootState, 'eventCallbackReducer'>>();
 listenerMiddleware.startListening({
   actionCreator: eventAction,
-  effect: async (action, listernerApi) => {
-    const trackerFuncs = listernerApi.getState()?.eventCallbackReducer?.trackerFuncs;
+  effect: async (action, listenerApi) => {
+    const trackerFuncs = listenerApi.getState()?.eventCallbackReducer?.trackerFuncs;
     for (const trackerFunc of trackerFuncs) {
       try {
         trackerFunc(action.payload);
@@ -327,14 +538,26 @@ export function useEventCallback(
   eventType: HeadlampEventType.DELETE_RESOURCE
 ): (data: EventDataType<DeleteResourceEvent>) => void;
 export function useEventCallback(
+  eventType: HeadlampEventType.DELETE_RESOURCES
+): (data: EventDataType<DeleteResourcesEvent>) => void;
+export function useEventCallback(
   eventType: HeadlampEventType.EDIT_RESOURCE
 ): (data: EventDataType<EditResourceEvent>) => void;
 export function useEventCallback(
   eventType: HeadlampEventType.SCALE_RESOURCE
 ): (data: EventDataType<ScaleResourceEvent>) => void;
 export function useEventCallback(
+  eventType: HeadlampEventType.SCALE_RESOURCES
+): (data: EventDataType<ScaleResourcesEvent>) => void;
+export function useEventCallback(
   eventType: HeadlampEventType.RESTART_RESOURCE
 ): (data: EventDataType<RestartResourceEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.RESTART_RESOURCES
+): (data: EventDataType<RestartResourcesEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.ROLLBACK_RESOURCE
+): (data: EventDataType<RollbackResourceEvent>) => void;
 export function useEventCallback(
   eventType: HeadlampEventType.LOGS
 ): (data: EventDataType<LogsEvent>) => void;
@@ -362,6 +585,33 @@ export function useEventCallback(
 export function useEventCallback(
   eventInfo: HeadlampEventType.OBJECT_EVENTS
 ): (events: Event[], resource?: KubeObject) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.PROJECT_LIST_VIEW
+): (data: EventDataType<ProjectListViewLoadedEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.PROJECT_DETAILS_VIEW
+): (data: EventDataType<ProjectDetailsViewLoadedEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.PROJECT_DETAILS_TAB_CHANGE
+): (data: EventDataType<ProjectDetailsTabChangeEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.CREATE_PROJECT
+): (data: EventDataType<CreateProjectEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.DELETE_PROJECT
+): (data: EventDataType<DeleteProjectEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.SETTINGS_VIEW
+): (data: EventDataType<SettingsViewLoadedEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.CLUSTER_SETTINGS_VIEW
+): (data: EventDataType<ClusterSettingsViewLoadedEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.PLUGIN_LIST_VIEW
+): (data: EventDataType<PluginListViewLoadedEvent>) => void;
+export function useEventCallback(
+  eventType: HeadlampEventType.PLUGIN_DETAILS_VIEW
+): (data: EventDataType<PluginDetailsViewLoadedEvent>) => void;
 export function useEventCallback(eventType?: HeadlampEventType | string) {
   const dispatch = useDispatch();
 
@@ -388,12 +638,20 @@ export function useEventCallback(eventType?: HeadlampEventType | string) {
       };
     case HeadlampEventType.DELETE_RESOURCE:
       return dispatchDataEventFunc<DeleteResourceEvent>(HeadlampEventType.DELETE_RESOURCE);
+    case HeadlampEventType.DELETE_RESOURCES:
+      return dispatchDataEventFunc<DeleteResourcesEvent>(HeadlampEventType.DELETE_RESOURCES);
     case HeadlampEventType.EDIT_RESOURCE:
       return dispatchDataEventFunc<EditResourceEvent>(HeadlampEventType.EDIT_RESOURCE);
     case HeadlampEventType.SCALE_RESOURCE:
       return dispatchDataEventFunc<ScaleResourceEvent>(HeadlampEventType.SCALE_RESOURCE);
+    case HeadlampEventType.SCALE_RESOURCES:
+      return dispatchDataEventFunc<ScaleResourcesEvent>(HeadlampEventType.SCALE_RESOURCES);
     case HeadlampEventType.RESTART_RESOURCE:
       return dispatchDataEventFunc<RestartResourceEvent>(HeadlampEventType.RESTART_RESOURCE);
+    case HeadlampEventType.RESTART_RESOURCES:
+      return dispatchDataEventFunc<RestartResourcesEvent>(HeadlampEventType.RESTART_RESOURCES);
+    case HeadlampEventType.ROLLBACK_RESOURCE:
+      return dispatchDataEventFunc<RollbackResourceEvent>(HeadlampEventType.ROLLBACK_RESOURCE);
     case HeadlampEventType.LOGS:
       return dispatchDataEventFunc<LogsEvent>(HeadlampEventType.LOGS);
     case HeadlampEventType.TERMINAL:
@@ -436,6 +694,32 @@ export function useEventCallback(eventType?: HeadlampEventType | string) {
           })
         );
       };
+    case HeadlampEventType.PROJECT_LIST_VIEW:
+      return dispatchDataEventFunc<ProjectListViewLoadedEvent>(HeadlampEventType.PROJECT_LIST_VIEW);
+    case HeadlampEventType.PROJECT_DETAILS_VIEW:
+      return dispatchDataEventFunc<ProjectDetailsViewLoadedEvent>(
+        HeadlampEventType.PROJECT_DETAILS_VIEW
+      );
+    case HeadlampEventType.PROJECT_DETAILS_TAB_CHANGE:
+      return dispatchDataEventFunc<ProjectDetailsTabChangeEvent>(
+        HeadlampEventType.PROJECT_DETAILS_TAB_CHANGE
+      );
+    case HeadlampEventType.CREATE_PROJECT:
+      return dispatchDataEventFunc<CreateProjectEvent>(HeadlampEventType.CREATE_PROJECT);
+    case HeadlampEventType.DELETE_PROJECT:
+      return dispatchDataEventFunc<DeleteProjectEvent>(HeadlampEventType.DELETE_PROJECT);
+    case HeadlampEventType.SETTINGS_VIEW:
+      return dispatchDataEventFunc<SettingsViewLoadedEvent>(HeadlampEventType.SETTINGS_VIEW);
+    case HeadlampEventType.CLUSTER_SETTINGS_VIEW:
+      return dispatchDataEventFunc<ClusterSettingsViewLoadedEvent>(
+        HeadlampEventType.CLUSTER_SETTINGS_VIEW
+      );
+    case HeadlampEventType.PLUGIN_LIST_VIEW:
+      return dispatchDataEventFunc<PluginListViewLoadedEvent>(HeadlampEventType.PLUGIN_LIST_VIEW);
+    case HeadlampEventType.PLUGIN_DETAILS_VIEW:
+      return dispatchDataEventFunc<PluginDetailsViewLoadedEvent>(
+        HeadlampEventType.PLUGIN_DETAILS_VIEW
+      );
     default:
       break;
   }

@@ -1,5 +1,20 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from 'fs';
-import * as AllComps from '.';
 
 const avoidCheck = [
   '.stories',
@@ -11,15 +26,29 @@ const avoidCheck = [
   'ActionsNotifier',
   'AlertNotification',
   'ErrorBoundary',
+  'fetchLatestKubeObject',
+  'logSeverityFilter',
+  'CopyableCell',
+  // Internal helper exported only so `ResourceTable` and its co-located
+  // tests can import it; deliberately kept out of the barrel.
+  'getResourceRowId',
 ];
 
 const checkExports = [
+  'A8RInfo',
   'CircularChart',
   'CreateButton',
+  'CreateResourceForm',
+  'CopyButton',
   'DeleteButton',
+  'DeleteMultipleButton',
+  'DetailsDrawer',
   'DocsViewer',
+  'DryRunPreviewDialog',
   'EditButton',
   'EditorDialog',
+  'EmptyStateActions',
+  'EnvVarGrid',
   'MainInfoSection',
   'MatchExpressions',
   'MetadataDisplay',
@@ -27,20 +56,29 @@ const checkExports = [
   'Resource',
   'ResourceListView',
   'ResourceTable',
+  'ResourceTableMultiActions',
   'resourceTableSlice',
   'ResourceTableColumnChooser',
   'RestartButton',
+  'RestartMultipleButton',
+  'RevisionHistorySection',
+  'DownloadButton',
+  'RollbackButton',
+  'RollbackDialog',
   'ScaleButton',
+  'ScaleMultipleButton',
   'SimpleEditor',
+  'UploadDialog',
   'ViewButton',
   'AuthVisible',
+  'LogsButton',
 ];
 
 function getFilesToVerify() {
   const filesToVerify: string[] = [];
   fs.readdirSync(__dirname).forEach(file => {
     const fileNoSuffix = file.replace(/\.[^/.]+$/, '');
-    if (!avoidCheck.find(suffix => fileNoSuffix.endsWith(suffix))) {
+    if (fileNoSuffix && !avoidCheck.find(suffix => fileNoSuffix.endsWith(suffix))) {
       filesToVerify.push(fileNoSuffix);
     }
   });
@@ -64,9 +102,10 @@ describe('Import tests', () => {
     });
   });
 
-  test('Check imports', () => {
-    filesToVerify.forEach((file: string) => {
-      const r = require(`./${file}`);
+  test('Check imports', async () => {
+    const AllComps = await import('./index');
+    for (const file of filesToVerify) {
+      const r = await import(`./${file}`);
 
       // Check that all components are exported.
       for (const key in r) {
@@ -77,6 +116,6 @@ describe('Import tests', () => {
           expect(AllComps).toHaveProperty(key);
         }
       }
-    });
-  });
+    }
+  }, 30000);
 });

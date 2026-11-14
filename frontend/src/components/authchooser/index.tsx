@@ -1,38 +1,58 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { InlineIcon } from '@iconify/react';
-import { Box, Button } from '@mui/material';
-import withStyles from '@mui/styles/withStyles';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import _ from 'lodash';
-import React from 'react';
+import React, { ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch } from 'react-redux';
 import { generatePath, useHistory, useLocation } from 'react-router-dom';
-import helpers from '../../helpers';
+import { getAppUrl } from '../../helpers/getAppUrl';
+import { getCluster, getClusterPrefixedPath } from '../../lib/cluster';
 import { useClustersConf } from '../../lib/k8s';
-import { testAuth } from '../../lib/k8s/apiProxy';
-import { createRouteURL, getRoute, getRoutePath } from '../../lib/router';
-import { getCluster, getClusterPrefixedPath } from '../../lib/util';
+import { testAuth } from '../../lib/k8s/api/v1/clusterApi';
+import { invalidateClusterUserInfo } from '../../lib/queryClient';
+import { createRouteURL } from '../../lib/router/createRouteURL';
+import { getRoute } from '../../lib/router/getRoute';
+import { getRoutePath } from '../../lib/router/getRoutePath';
 import { setConfig } from '../../redux/configSlice';
+import { useTypedSelector } from '../../redux/hooks';
 import { ClusterDialog } from '../cluster/Chooser';
-import { Link, Loader } from '../common';
 import { DialogTitle } from '../common/Dialog';
 import Empty from '../common/EmptyContent';
+import Link from '../common/Link';
+import Loader from '../common/Loader';
 import OauthPopup from '../oidcauth/OauthPopup';
 
-const ColorButton = withStyles(theme => ({
-  root: {
-    color: theme.palette.primary.contrastText,
-    backgroundColor: theme.palette.primaryColor,
-    width: '14rem',
-    padding: '0.5rem 2rem',
-    '&:hover': {
-      opacity: '0.8',
-      backgroundColor: theme.palette.text.primary,
-    },
-  },
-}))(Button);
+function ColorButton({ children, ...rest }: ComponentProps<typeof Button>) {
+  return (
+    <Button variant="contained" sx={{ width: '14rem', padding: '0.5rem 2rem' }} {...rest}>
+      {children}
+    </Button>
+  );
+}
 
 interface ReactRouterLocationStateIface {
-  from?: Location;
+  from?: {
+    pathname: string;
+    search?: string;
+    hash?: string;
+  };
 }
 
 export interface AuthChooserProps {
@@ -44,11 +64,12 @@ function AuthChooser({ children }: AuthChooserProps) {
   const location = useLocation();
   const clusters = useClustersConf();
   const dispatch = useDispatch();
-  const [testingAuth, setTestingAuth] = React.useState(false);
+  const [testingAuth, setTestingAuth] = React.useState(true);
   const [error, setError] = React.useState<Error | null>(null);
   const { from = { pathname: createRouteURL('cluster') } } = (location.state ||
     {}) as ReactRouterLocationStateIface;
   const clusterName = getCluster() as string;
+  const oidcAutoLogin = useTypedSelector(state => state.config.oidcAutoLogin);
   const { t } = useTranslation();
   const clustersRef = React.useRef<typeof clusters>(null);
   const cancelledRef = React.useRef(false);
@@ -56,6 +77,17 @@ function AuthChooser({ children }: AuthChooserProps) {
   let clusterAuthType = '';
   if (clusters && clusters[clusterName]) {
     clusterAuthType = clusters[clusterName].auth_type;
+  }
+
+  // Whether the last OIDC sign-in was rejected by the cluster's API server.
+  // Set in handleOidcAuth, & cleared once auth succeeds in AuthRoute. See Issue #2848.
+  let oidcTokenRejected = false;
+  if (clusterAuthType === 'oidc' && clusterName) {
+    try {
+      oidcTokenRejected = sessionStorage.getItem(`oidc-login-attempted.${clusterName}`) === 'true';
+    } catch {
+      // sessionStorage unavailable (e.g. private browsing with strict settings).
+    }
   }
 
   const numClusters = Object.keys(clusters || {}).length;
@@ -73,6 +105,10 @@ function AuthChooser({ children }: AuthChooserProps) {
       }
       const clusterName = getCluster();
 
+      // Reset the testing auth state just to prevent the early return from this function
+      // without actually testing auth, which would cause the auth chooser to never show up.
+      setTestingAuth(false);
+
       if (!clusterName || !clusters || sameClusters || error || numClusters === 0) {
         return;
       }
@@ -80,6 +116,59 @@ function AuthChooser({ children }: AuthChooserProps) {
       const cluster = clusters[clusterName];
       if (!cluster) {
         return;
+      }
+
+      if (clusterAuthType === 'oidc' && oidcAutoLogin) {
+        const urlParams = new URLSearchParams(location.search);
+        const isLoggingOut = urlParams.get('logout') === 'true';
+
+        if (!isLoggingOut && !oidcTokenRejected) {
+          setTestingAuth(true);
+
+          testAuth(clusterName)
+            .then(() => {
+              if (!cancelledRef.current) {
+                history.replace(from);
+              }
+            })
+            .catch(err => {
+              if (!cancelledRef.current) {
+                // Only redirect for explicit authentication/authorization failures (401 or 403).
+                // For other errors (e.g. 502 Bad Gateway, 504 Gateway Timeout, network errors),
+                // preserve the error state so the user sees the connection/server error UI.
+                const status = err?.status;
+                const isAuthFailure = status === 401 || status === 403;
+                if (!isAuthFailure) {
+                  setError(err instanceof Error ? err : new Error(err?.message || String(err)));
+                  return;
+                }
+
+                const returnUrl = from.pathname + (from.search || '') + (from.hash || '');
+                if (
+                  returnUrl &&
+                  !returnUrl.startsWith('/auth') &&
+                  !returnUrl.includes('oidc-callback')
+                ) {
+                  try {
+                    sessionStorage.setItem('oidc_return_url', returnUrl);
+                  } catch (e) {
+                    console.error('Failed to save OIDC return URL', e);
+                  }
+                }
+                const oauthUrl = `${getAppUrl()}oidc?dt=${Date.now()}&cluster=${encodeURIComponent(
+                  clusterName
+                )}`;
+                window.location.href = oauthUrl;
+              }
+            })
+            .finally(() => {
+              if (!cancelledRef.current) {
+                setTestingAuth(false);
+              }
+            });
+
+          return;
+        }
       }
 
       // If we haven't yet figured whether we need to use a token for the current
@@ -95,14 +184,14 @@ function AuthChooser({ children }: AuthChooserProps) {
 
         console.debug('Testing auth at authchooser');
 
-        testAuth()
+        testAuth(clusterName)
           .then(() => {
             console.debug('Not requiring token as testing auth succeeded');
             useToken = false;
           })
           .catch(err => {
             if (!cancelledRef.current) {
-              console.debug('Requiring token as testing auth failed:', err);
+              console.debug(`Requiring token for ${clusterName} as testing auth failed:`, err);
 
               // Ideally we'd only not assign the error if it was 401 or 403 (so we let the logic
               // proceed to request a token), but let's first check whether this is all we get
@@ -159,7 +248,7 @@ function AuthChooser({ children }: AuthChooserProps) {
       }
     },
     // eslint-disable-next-line
-    [clusters, error]
+    [clusters, error, oidcAutoLogin, location.search]
   );
 
   // Ensure we have a way to know in the testAuth result whether this component is no longer
@@ -184,24 +273,35 @@ function AuthChooser({ children }: AuthChooserProps) {
           ? t('Authentication: {{ clusterName }}', { clusterName })
           : t('Authentication')
       }
-      haveClusters={!!clusters && Object.keys(clusters).length > 1}
       error={error}
-      oauthUrl={`${helpers.getAppUrl()}oidc?dt=${Date()}&cluster=${getCluster()}`}
+      oauthUrl={`${getAppUrl()}oidc?dt=${Date()}&cluster=${getCluster()}&popup=true`}
       clusterAuthType={clusterAuthType}
+      oidcTokenRejected={oidcTokenRejected}
       handleTryAgain={runTestAuthAgain}
       handleOidcAuth={() => {
-        history.replace({
-          pathname: generatePath(getClusterPrefixedPath(), {
-            cluster: clusterName as string,
-          }),
-        });
+        if (clusterName) {
+          try {
+            sessionStorage.setItem(`oidc-login-attempted.${clusterName}`, 'true');
+          } catch {
+            // sessionStorage unavailable (e.g. private browsing with strict settings).
+          }
+        }
+        // Invalidate every cluster's cached identity, not just this one: the
+        // backend may have broadcast the new token to sibling clusters.
+        invalidateClusterUserInfo();
+        history.replace(from);
       }}
       handleBackButtonPress={() => {
-        history.goBack();
+        numClusters > 1 ? history.goBack() : history.push('/');
       }}
       handleTokenAuth={() => {
+        const tokenRoute = getRoute('token');
+        if (!tokenRoute) {
+          console.error("Can't find 'token' route");
+          return;
+        }
         history.push({
-          pathname: generatePath(getRoutePath(getRoute('token')), {
+          pathname: generatePath(getRoutePath(tokenRoute), {
             cluster: clusterName as string,
           }),
         });
@@ -219,7 +319,7 @@ export interface PureAuthChooserProps {
   error: Error | null;
   oauthUrl: string;
   clusterAuthType: string;
-  haveClusters: boolean;
+  oidcTokenRejected?: boolean;
   handleOidcAuth: () => void;
   handleTokenAuth: () => void;
   handleTryAgain: () => void;
@@ -235,7 +335,7 @@ export function PureAuthChooser({
   error,
   oauthUrl,
   clusterAuthType,
-  haveClusters,
+  oidcTokenRejected,
   handleOidcAuth,
   handleTokenAuth,
   handleTryAgain,
@@ -264,7 +364,16 @@ export function PureAuthChooser({
             {title}
           </DialogTitle>
           {!error ? (
-            <Box>
+            <Box display="flex" flexDirection="column" alignItems="center">
+              {clusterAuthType === 'oidc' && oidcTokenRejected ? (
+                <Box m={2}>
+                  <Empty>
+                    {t(
+                      'The cluster did not accept your sign-in. Its API server may not trust this OIDC provider (issuer, client ID, or audience), or your token may be expired or lack the required permissions. Please check the cluster API server OIDC configuration.'
+                    )}
+                  </Empty>
+                </Box>
+              ) : null}
               {clusterAuthType === 'oidc' ? (
                 <Box m={2}>
                   <OauthPopup
@@ -281,7 +390,7 @@ export function PureAuthChooser({
                 <ColorButton onClick={handleTokenAuth}>{t('Use A Token')}</ColorButton>
               </Box>
               <Box m={2} textAlign="center">
-                <Link routeName="settingsCluster" params={{ clusterID: clusterName }}>
+                <Link routeName="settingsClusterHomeContext" search={{ c: clusterName }}>
                   {t('translation|Cluster settings')}
                 </Link>
               </Box>
@@ -299,34 +408,44 @@ export function PureAuthChooser({
                         errorMessage: error!.message,
                       })}
                 </Empty>
-                <Link routeName="settingsCluster" params={{ clusterID: clusterName }}>
+                <Link routeName="settingsClusterHomeContext" search={{ c: clusterName }}>
                   {t('translation|Cluster settings')}
                 </Link>
               </Box>
-              <ColorButton onClick={handleTryAgain}>{t('translation|Try Again')}</ColorButton>
+              <Button variant="contained" color="primary" onClick={handleTryAgain}>
+                {t('translation|Try Again')}
+              </Button>
             </Box>
           )}
         </Box>
       )}
-      {haveClusters && (
-        <Box display="flex" flexDirection="column" alignItems="center">
-          <Box
-            m={2}
-            display="flex"
-            alignItems="center"
-            style={{ cursor: 'pointer' }}
-            onClick={handleBackButtonPress}
-            role="button"
-          >
-            <Box pt={0.5}>
-              <InlineIcon icon="mdi:chevron-left" height={20} width={20} />
-            </Box>
-            <Box fontSize={14} style={{ textTransform: 'uppercase' }}>
-              {t('translation|Back')}
-            </Box>
+      <Box display="flex" flexDirection="column" alignItems="center">
+        <Box
+          m={2}
+          display="flex"
+          alignItems="center"
+          style={{ cursor: 'pointer' }}
+          onClick={handleBackButtonPress}
+          onKeyDown={e => {
+            if (e.repeat) {
+              return;
+            }
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleBackButtonPress();
+            }
+          }}
+          tabIndex={0}
+          role="button"
+        >
+          <Box pt={0.5}>
+            <InlineIcon icon="mdi:chevron-left" height={20} width={20} />
+          </Box>
+          <Box fontSize={14} style={{ textTransform: 'uppercase' }}>
+            {t('translation|Back')}
           </Box>
         </Box>
-      )}
+      </Box>
       {children}
     </ClusterDialog>
   );

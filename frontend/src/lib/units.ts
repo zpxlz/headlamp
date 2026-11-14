@@ -1,4 +1,20 @@
 /*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
  * This module was taken from the k8dash project.
  */
 
@@ -22,8 +38,19 @@ export function parseRam(value: string) {
 function parseUnitsOfBytes(value: string): number {
   if (!value) return 0;
 
-  const groups = value.match(/(\d+)([BKMGTPEe])?(i)?(\d+)?/) || [];
-  const number = parseInt(groups[1], 10);
+  // Fractional byte suffixes are milli (m), micro (u), and nano (n).
+  // Support integer and decimal quantities without matching other suffixes.
+  if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)[mun]$/.test(value)) {
+    const divisor = value.endsWith('n') ? 1e9 : value.endsWith('u') ? 1e6 : 1000;
+    return parseFloat(value) / divisor;
+  }
+
+  // Kubernetes spells kilo with a lowercase k in the decimal suffixes
+  // (m | "" | k | M | G | T | P | E), so 1k is 1000 while 1Ki is 1024. The
+  // uppercase K is not a valid suffix, but it has been read as kilo here for a
+  // long time, so it stays accepted.
+  const groups = value.match(/(\d+(?:\.\d+)?)([BkKMGTPEe])?(i)?(\d+)?/) || [];
+  const number = parseFloat(groups[1]) * (value.startsWith('-') ? -1 : 1);
 
   // number ex. 1000
   if (groups[2] === undefined) {
@@ -35,7 +62,13 @@ function parseUnitsOfBytes(value: string): number {
     return number * 10 ** parseInt(groups[4], 10);
   }
 
-  const unitIndex = _.indexOf(UNITS, groups[2]);
+  // The binary suffixes are Ki, Mi, Gi and so on, all with an uppercase letter.
+  // There is no lowercase ki, so it is left unparsed rather than read as 1024.
+  if (groups[2] === 'k' && groups[3] !== undefined) {
+    return number;
+  }
+
+  const unitIndex = _.indexOf(UNITS, groups[2] === 'k' ? 'K' : groups[2]);
 
   // Unit + i ex. 1Ki
   if (groups[3] !== undefined) {
@@ -62,7 +95,9 @@ export function unparseRam(value: number) {
 export function parseCpu(value: string) {
   if (!value) return 0;
 
-  const number = parseInt(value, 10);
+  // parseFloat (not parseInt) so decimal-core quantities like "0.5" or "1.5"
+  // keep their fractional part. Suffixed forms still parse ("500m" -> 500).
+  const number = parseFloat(value);
   if (value.endsWith('n')) return number;
   if (value.endsWith('u')) return number * 1000;
   if (value.endsWith('m')) return number * 1000 * 1000;
@@ -76,4 +111,23 @@ export function unparseCpu(value: string) {
     value: _.round(result / 1000000, 2),
     unit: 'm',
   };
+}
+
+/**
+ * Divides two Kubernetes resource quantities.
+ * Useful for computing resource field references with divisors.
+ * @param a - The dividend resource string (e.g., "1Gi", "500m")
+ * @param b - The divisor resource string (e.g., "1Mi", "1")
+ * @param resourceType - The type of resource ('cpu' or 'memory'). Defaults to 'memory'.
+ * @returns The result of dividing a by b
+ */
+export function divideK8sResources(
+  a: string,
+  b: string,
+  resourceType: 'cpu' | 'memory' = 'memory'
+): number {
+  if (resourceType === 'cpu') {
+    return parseCpu(a) / parseCpu(b);
+  }
+  return parseUnitsOfBytes(a) / parseUnitsOfBytes(b);
 }

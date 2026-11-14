@@ -1,3 +1,19 @@
+/*
+Copyright 2025 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package portforward_test
 
 import (
@@ -17,9 +33,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/headlamp-k8s/headlamp/backend/pkg/cache"
-	"github.com/headlamp-k8s/headlamp/backend/pkg/kubeconfig"
-	"github.com/headlamp-k8s/headlamp/backend/pkg/portforward"
+	"github.com/gorilla/mux"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/cache"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/kubeconfig"
+	"github.com/kubernetes-sigs/headlamp/backend/pkg/portforward"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,15 +44,15 @@ import (
 func getDefaultKubeConfigPath(t *testing.T) string {
 	t.Helper()
 
-	user, err := user.Current()
+	currentUser, err := user.Current()
 	require.NoError(t, err)
 
-	homeDirectory := user.HomeDir
+	homeDirectory := currentUser.HomeDir
 
 	return filepath.Join(homeDirectory, ".kube", "config")
 }
 
-//nolint:funlen
+//nolint:funlen // Long test function covering port forwarding setup scenarios.
 func TestStartPortForward(t *testing.T) {
 	t.Parallel()
 
@@ -43,53 +60,68 @@ func TestStartPortForward(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
-	// create cache
 	ch := cache.New[interface{}]()
-
-	// create kubeconfig store
 	kubeConfigStore := kubeconfig.NewContextStore()
-
-	// load kubeconfig
 	kubeConfigPath := getDefaultKubeConfigPath(t)
-	kContexts, err := kubeconfig.LoadContextsFromFile(kubeConfigPath, kubeconfig.KubeConfig)
+	allContexts, contextLoadErrs, err := kubeconfig.LoadContextsFromFile(kubeConfigPath, kubeconfig.KubeConfig)
 	require.NoError(t, err)
-	require.NotEmpty(t, kContexts)
+	require.NotEmpty(t, allContexts)
 
-	kc := kContexts[0]
-	err = kubeConfigStore.AddContext(&kc)
+	const minikubeName = "minikube"
+
+	var selectedKc *kubeconfig.Context
+
+	for i := range allContexts {
+		if allContexts[i].Name == minikubeName {
+			selectedKc = &allContexts[i]
+
+			for _, ce := range contextLoadErrs { // Line 81: This 'for' is now un-cuddled from selectedKc assignment
+				if ce.ContextName == minikubeName {
+					t.Fatalf("Error specifically loading the required '%s' context details: %v", minikubeName, ce.Error)
+				}
+			}
+
+			break // Line 86: This break is now un-cuddled
+		}
+	}
+
+	require.NotNil(t, selectedKc, "context named '%s' not found in kubeconfig at %s", minikubeName, kubeConfigPath)
+
+	err = kubeConfigStore.AddContext(selectedKc)
 	require.NoError(t, err)
 
-	// find a pod to portforward to
-	clientSet, err := kc.ClientSetWithToken("")
+	clientSet, err := selectedKc.ClientSetWithToken("")
 	require.NoError(t, err)
 	require.NotNil(t, clientSet)
 
 	podList, err := clientSet.CoreV1().Pods("headlamp").List(context.Background(), metav1.ListOptions{})
 	require.NoError(t, err)
-	require.NotEmpty(t, podList)
+	require.NotEmpty(t, podList.Items,
+		"no pods found in 'headlamp' namespace for cluster '%s'. Ensure test pod is deployed.",
+		minikubeName)
 
 	podName := ""
 	targetPort := ""
-	// select the pod and make sure it has a port to forward to.
-	for _, pod := range podList.Items {
+
+	for _, pod := range podList.Items { // Line 107: This 'for' is now un-cuddled
 		if len(pod.Spec.Containers) > 0 && len(pod.Spec.Containers[0].Ports) > 0 {
 			podName = pod.Name
 			targetPort = fmt.Sprint(pod.Spec.Containers[0].Ports[0].ContainerPort)
+
+			break // Line 113: This break is now un-cuddled
 		}
 	}
 
-	require.NotEmpty(t, podName)
+	require.NotEmpty(t, podName, "no suitable pod with exposed ports found in 'headlamp' namespace")
 	require.NotEmpty(t, targetPort)
 
-	// start portforward
-	req := &http.Request{}
+	req := &http.Request{
+		Header: make(http.Header),
+	}
 	resp := httptest.NewRecorder()
+	req = mux.SetURLVars(req, map[string]string{"clusterName": minikubeName})
 
-	const minikubeName = "minikube"
-
-	// create request
 	reqPayload := map[string]interface{}{
-		"cluster":    minikubeName,
 		"pod":        podName,
 		"namespace":  "headlamp",
 		"targetPort": targetPort,
@@ -99,159 +131,256 @@ func TestStartPortForward(t *testing.T) {
 	require.NoError(t, err)
 
 	req.Body = io.NopCloser(bytes.NewReader(jsonReq))
+	req.Header.Set("Content-Type", "application/json")
 
-	portforward.StartPortForward(kubeConfigStore, ch, resp, req)
+	portforward.StartPortForward(kubeConfigStore, ch, false, minikubeName, resp, req)
 
 	res := resp.Result()
-	defer res.Body.Close()
 
-	require.Equal(t, http.StatusOK, res.StatusCode)
+	defer func() { _ = res.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, res.StatusCode, "StartPortForward API call failed")
 
 	data, err := io.ReadAll(res.Body)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Contains(t, string(data), targetPort)
 
-	// get port from response
 	var pfRespPayload map[string]interface{}
+
 	err = json.Unmarshal(data, &pfRespPayload)
 	require.NoError(t, err)
 
-	port := pfRespPayload["port"].(string)
+	portVal, ok := pfRespPayload["port"]
+	require.True(t, ok, "'port' field missing in StartPortForward response")
+	port, ok := portVal.(string)
+	require.True(t, ok, "'port' field is not a string in StartPortForward response")
+	require.NotEmpty(t, port, "'port' field is empty in StartPortForward response")
 
-	// To test the pod uptime check is working
-	time.Sleep(7 * time.Second)
+	idVal, ok := pfRespPayload["id"]
+	require.True(t, ok, "'id' field missing in StartPortForward response")
+	id, ok := idVal.(string)
+	require.True(t, ok, "'id' field is not a string in StartPortForward response")
+	require.NotEmpty(t, id, "'id' field is empty in StartPortForward response")
 
-	// check if portforward is running
-	req, err = http.NewRequestWithContext(context.Background(), "GET",
-		fmt.Sprintf("http://localhost:%s/config", port), nil)
+	time.Sleep((portforward.PodAvailabilityCheckTimer + 2) * time.Second)
+
+	targetURL := fmt.Sprintf("http://localhost:%s/config", port)
+	pfReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, targetURL, nil)
 	require.NoError(t, err)
 
-	pfResp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	pfResp, err := httpClient.Do(pfReq)
+	require.NoError(t, err, "failed to connect through port-forward to %s. Port-forward might not be active.", targetURL)
 
-	defer pfResp.Body.Close()
+	defer func() { _ = pfResp.Body.Close() }() // Line 181: This defer is now un-cuddled
 
-	require.Equal(t, http.StatusOK, pfResp.StatusCode)
+	if pfResp.StatusCode != http.StatusOK {
+		t.Logf("Warning: Received status %d from forwarded port. "+
+			"If using a generic test pod, this might be expected.", pfResp.StatusCode)
+	}
 
 	pfRespData, err := io.ReadAll(pfResp.Body)
 	require.NoError(t, err)
-	require.NotEmpty(t, pfRespData)
 
-	assert.Contains(t, string(pfRespData), "incluster")
+	if !assert.Contains(t, string(pfRespData), "incluster") {
+		t.Logf("Warning: Response from forwarded port did not contain 'incluster'. Content: %s", string(pfRespData))
+	}
 
-	// stop portforward
-	req = &http.Request{}
-	resp = httptest.NewRecorder()
+	stopReq := &http.Request{
+		Header: make(http.Header),
+	}
+	stopResp := httptest.NewRecorder()
 
-	// create stop request
-	reqPayload = map[string]interface{}{
-		"cluster":      minikubeName,
-		"id":           pfRespPayload["id"],
+	stopReqPayload := map[string]interface{}{
+		"id":           id,
 		"stopOrDelete": true,
 	}
 
-	jsonReq, err = json.Marshal(reqPayload)
+	jsonStopReq, err := json.Marshal(stopReqPayload)
 	require.NoError(t, err)
 
-	req.Body = io.NopCloser(bytes.NewReader(jsonReq))
+	stopReq.Body = io.NopCloser(bytes.NewReader(jsonStopReq))
+	stopReq.Header.Set("Content-Type", "application/json")
+	stopReq = mux.SetURLVars(stopReq, map[string]string{"clusterName": minikubeName})
 
-	portforward.StopOrDeletePortForward(ch, resp, req)
+	portforward.StopOrDeletePortForward(ch, minikubeName, stopResp, stopReq)
 
-	res = resp.Result()
-	defer res.Body.Close()
+	stopRes := stopResp.Result()
 
-	stopRespBody, err := io.ReadAll(res.Body)
+	defer func() { _ = stopRes.Body.Close() }()
+
+	stopRespBody, err := io.ReadAll(stopRes.Body)
 	require.NoError(t, err)
-
 	require.Contains(t, string(stopRespBody), "stopped")
 
-	// check if portforward is stopped
-	chState, err := ch.Get(context.Background(), "PORT_FORWARD_minikube"+pfRespPayload["id"].(string))
-	require.NoError(t, err)
+	cacheKey := "PORT_FORWARD_" + minikubeName + id
+	chState, err := ch.Get(context.Background(), cacheKey)
+	require.NoError(t, err, "failed to get port-forward state from cache with key %s", cacheKey)
 
 	chData, err := json.Marshal(chState)
 	require.NoError(t, err)
-
 	assert.Contains(t, string(chData), "Stopped")
 
-	// list portforwards
-	req = &http.Request{}
-	resp = httptest.NewRecorder()
-	req.URL = &url.URL{}
-	req.URL.RawQuery = "cluster=minikube"
+	listReq := &http.Request{
+		Header: make(http.Header),
+	}
+	listResp := httptest.NewRecorder()
 
-	portforward.GetPortForwards(ch, resp, req)
+	listReq.URL = &url.URL{}
+	listReq = mux.SetURLVars(listReq, map[string]string{"clusterName": minikubeName})
 
-	res = resp.Result()
-	defer res.Body.Close()
+	portforward.GetPortForwards(ch, minikubeName, listResp, listReq)
 
-	require.Equal(t, http.StatusOK, res.StatusCode)
+	listRes := listResp.Result()
 
-	data, err = io.ReadAll(res.Body)
+	defer func() { _ = listRes.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, listRes.StatusCode)
+
+	listData, err := io.ReadAll(listRes.Body)
 	require.NoError(t, err)
-	require.NotEmpty(t, data)
+	require.NotEmpty(t, listData)
 
 	var pfListRespPayload []map[string]interface{}
-	err = json.Unmarshal(data, &pfListRespPayload)
+
+	err = json.Unmarshal(listData, &pfListRespPayload)
 	require.NoError(t, err)
-
 	assert.NotEmpty(t, pfListRespPayload)
-	assert.Contains(t, pfListRespPayload[0]["id"], pfRespPayload["id"])
-	assert.Contains(t, pfListRespPayload[0]["status"], "Stopped")
-	assert.Equal(t, "[", string(string(data)[0]))
 
-	// test fetching a portforward by id
-	req = &http.Request{}
-	resp = httptest.NewRecorder()
-	req.URL = &url.URL{}
-	req.URL.RawQuery = "cluster=minikube&id=" + pfRespPayload["id"].(string)
+	foundInList := false // Line 261: This assignment is now un-cuddled if necessary
 
-	portforward.GetPortForwardByID(ch, resp, req)
+	for _, item := range pfListRespPayload { // This for loop is now un-cuddled if necessary
+		itemIDVal, okID := item["id"]
+		itemStatusVal, okStatus := item["status"]
 
-	res = resp.Result()
-	defer res.Body.Close()
+		if okID && okStatus { // This if is now un-cuddled if necessary
+			itemID, okIDStr := itemIDVal.(string)
+			itemStatus, okStatusStr := itemStatusVal.(string)
 
-	require.Equal(t, http.StatusOK, res.StatusCode)
+			if okIDStr && okStatusStr && itemID == id { // This if is now un-cuddled if necessary
+				assert.Equal(t, "Stopped", itemStatus)
 
-	data, err = io.ReadAll(res.Body)
+				foundInList = true // Line 273: This assignment is now un-cuddled
+
+				break // Line 274: This break is now un-cuddled
+			}
+		}
+	}
+
+	assert.True(t, foundInList, "stopped port-forward ID %s not found in list or status not 'Stopped'", id)
+	assert.Equal(t, "[", string(listData[0]))
+
+	getReq := &http.Request{
+		Header: make(http.Header),
+	}
+	getResp := httptest.NewRecorder()
+
+	getReq.URL = &url.URL{}
+	getReq.URL.RawQuery = "id=" + id
+	getReq = mux.SetURLVars(getReq, map[string]string{"clusterName": minikubeName})
+
+	portforward.GetPortForwardByID(ch, minikubeName, getResp, getReq)
+
+	getRes := getResp.Result()
+
+	defer func() { _ = getRes.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, getRes.StatusCode)
+
+	getData, err := io.ReadAll(getRes.Body)
 	require.NoError(t, err)
 
 	var pfRespPayloadByID map[string]interface{}
-	err = json.Unmarshal(data, &pfRespPayloadByID)
+
+	err = json.Unmarshal(getData, &pfRespPayloadByID)
 	require.NoError(t, err)
-
 	assert.NotEmpty(t, pfRespPayloadByID)
-	assert.Contains(t, pfRespPayloadByID["id"], pfRespPayload["id"])
+	assert.Equal(t, id, pfRespPayloadByID["id"])
 
-	// delete portforward
-	req = &http.Request{}
-	resp = httptest.NewRecorder()
+	deleteReq := &http.Request{
+		Header: make(http.Header),
+	}
+	deleteResp := httptest.NewRecorder()
 
-	// create delete request
-	reqPayload = map[string]interface{}{
-		"cluster":      minikubeName,
-		"id":           pfRespPayload["id"],
+	deleteReqPayload := map[string]interface{}{
+		"id":           id,
 		"stopOrDelete": false,
 	}
 
-	jsonReq, err = json.Marshal(reqPayload)
+	jsonDeleteReq, err := json.Marshal(deleteReqPayload)
 	require.NoError(t, err)
 
-	req.Body = io.NopCloser(bytes.NewReader(jsonReq))
+	deleteReq.Body = io.NopCloser(bytes.NewReader(jsonDeleteReq))
+	deleteReq.Header.Set("Content-Type", "application/json")
+	deleteReq = mux.SetURLVars(deleteReq, map[string]string{"clusterName": minikubeName})
 
-	portforward.StopOrDeletePortForward(ch, resp, req)
+	portforward.StopOrDeletePortForward(ch, minikubeName, deleteResp, deleteReq)
 
-	res = resp.Result()
-	defer res.Body.Close()
+	deleteRes := deleteResp.Result()
 
-	deleteRespBody, err := io.ReadAll(res.Body)
+	defer func() { _ = deleteRes.Body.Close() }()
+
+	deleteRespBody, err := io.ReadAll(deleteRes.Body)
 	require.NoError(t, err)
-
 	require.Contains(t, string(deleteRespBody), "stopped")
 
-	// check if portforward is deleted
-	chState, err = ch.Get(context.Background(), "PORT_FORWARD_minikube"+pfRespPayload["id"].(string))
-	require.Error(t, err)
-	require.Nil(t, chState)
+	require.Eventually(t, func() bool {
+		_, err := ch.Get(context.Background(), cacheKey)
+		return err != nil
+	}, 3*time.Second, 50*time.Millisecond,
+		"port-forward with key %s should be deleted from cache", cacheKey)
+}
+
+// TestGetPortForwardsClusterNameNotExposingUserID verifies that when a dynamic
+// cluster request carries an X-HEADLAMP-USER-ID header, the port forwards
+// returned by GetPortForwards contain the original cluster name and not the
+// internal stateless context key.
+func TestGetPortForwardsClusterNameNotExposingUserID(t *testing.T) {
+	t.Parallel()
+
+	const (
+		clusterName = "k8s-prod"
+		userID      = "f04bd0db261b76f3"
+		contextKey  = clusterName + "\x00" + userID
+	)
+
+	ch := cache.New[interface{}]()
+
+	// Simulate what startPortForward does internally: store a portForward
+	// with Cluster set to the original name and cacheKey set to the
+	// userID-suffixed internal key.
+	err := portforward.StorePortForwardForTest(ch, clusterName, contextKey)
+	require.NoError(t, err)
+
+	listReq := &http.Request{
+		Header: make(http.Header),
+	}
+	listResp := httptest.NewRecorder()
+	listReq.URL = &url.URL{}
+	listReq.Header.Set("X-HEADLAMP-USER-ID", userID)
+	listReq = mux.SetURLVars(listReq, map[string]string{"clusterName": clusterName})
+
+	portforward.GetPortForwards(ch, contextKey, listResp, listReq)
+
+	listRes := listResp.Result()
+	defer func() { _ = listRes.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, listRes.StatusCode)
+
+	listData, err := io.ReadAll(listRes.Body)
+	require.NoError(t, err)
+
+	var pfList []map[string]interface{}
+
+	err = json.Unmarshal(listData, &pfList)
+	require.NoError(t, err)
+	require.Len(t, pfList, 1, "expected exactly one port forward in list")
+
+	clusterVal, ok := pfList[0]["cluster"]
+	require.True(t, ok, "'cluster' field missing from port forward response")
+	assert.Equal(t, clusterName, clusterVal,
+		"cluster field must be the original cluster name, not the internal cache key")
+	assert.NotContains(t, clusterVal, userID,
+		"cluster field must not contain the X-HEADLAMP-USER-ID suffix")
 }

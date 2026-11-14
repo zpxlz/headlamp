@@ -1,10 +1,24 @@
-import { Meta } from '@storybook/react';
-import { Lease } from '../../lib/k8s/lease';
-import { TestContext } from '../../test';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import { LeaseDetails } from './Details';
 import { LEASE_DUMMY_DATA } from './storyHelper';
-
-Lease.useGet = () => [new Lease(LEASE_DUMMY_DATA[0]), null, () => {}, () => {}] as any;
 
 export default {
   title: 'Lease/LeaseDetailsView',
@@ -13,7 +27,7 @@ export default {
   decorators: [
     Story => {
       return (
-        <TestContext>
+        <TestContext routerMap={{ name: 'my-lease' }}>
           <Story />
         </TestContext>
       );
@@ -21,8 +35,28 @@ export default {
   ],
 } as Meta;
 
-const Template = () => {
+const Template: StoryFn = () => {
   return <LeaseDetails />;
 };
 
 export const LeaseDetail = Template.bind({});
+LeaseDetail.parameters = {
+  msw: {
+    handlers: {
+      storyBase: [],
+      story: [
+        http.get(`${API_BASE}/apis/coordination.k8s.io/v1/leases/my-lease`, () =>
+          HttpResponse.json(LEASE_DUMMY_DATA[0])
+        ),
+        http.get(`${API_BASE}/apis/coordination.k8s.io/v1/leases`, () => HttpResponse.error()),
+        http.get(`${API_BASE}/api/v1/namespaces/default/events`, () =>
+          HttpResponse.json({
+            kind: 'EventList',
+            items: [],
+            metadata: {},
+          })
+        ),
+      ],
+    },
+  },
+};

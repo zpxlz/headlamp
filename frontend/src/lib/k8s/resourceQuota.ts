@@ -1,6 +1,22 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { normalizeUnit } from '../util';
-import { apiFactoryWithNamespace } from './apiProxy';
-import { KubeObjectInterface, makeKubeObject } from './cluster';
+import type { KubeObjectInterface } from './KubeObject';
+import { KubeObject } from './KubeObject';
 
 interface spec {
   hard: {
@@ -27,27 +43,37 @@ interface status {
 
 export interface KubeResourceQuota extends KubeObjectInterface {
   spec: spec;
-  status: status;
+  status?: status;
 }
 
-class ResourceQuota extends makeKubeObject<KubeResourceQuota>('resourceQuota') {
-  static apiEndpoint = apiFactoryWithNamespace('', 'v1', 'resourcequotas');
+class ResourceQuota extends KubeObject<KubeResourceQuota> {
+  static kind = 'ResourceQuota';
+  static apiName = 'resourcequotas';
+  static apiVersion = 'v1';
+  static isNamespaced = true;
 
-  get spec(): spec {
-    return this.jsonData!.spec;
+  static getBaseObject(): KubeResourceQuota {
+    const baseObject = super.getBaseObject() as KubeResourceQuota;
+    baseObject.spec = { hard: {} };
+    return baseObject;
   }
 
-  get status(): status {
-    return this.jsonData!.status;
+  get spec(): spec {
+    return this.jsonData.spec;
+  }
+
+  get status(): status | undefined {
+    return this.jsonData.status;
   }
 
   get requests(): string[] {
     const req: string[] = [];
+    const used = this.jsonData.status?.used ?? {};
     this.spec.hard &&
       Object.keys(this.spec.hard).forEach(key => {
         if (key === 'cpu' || key === 'memory' || key.startsWith('requests.')) {
           req.push(
-            `${key}: ${normalizeUnit(key, this.status.used[key])}/${normalizeUnit(
+            `${key}: ${normalizeUnit(key, used[key] ?? '0')}/${normalizeUnit(
               key,
               this.spec.hard[key]
             )}`
@@ -59,11 +85,12 @@ class ResourceQuota extends makeKubeObject<KubeResourceQuota>('resourceQuota') {
 
   get limits(): string[] {
     const limits: string[] = [];
+    const used = this.jsonData.status?.used ?? {};
     this.spec.hard &&
       Object.keys(this.spec.hard).forEach(key => {
         if (key.startsWith('limits.')) {
           limits.push(
-            `${key}: ${normalizeUnit(key, this.status.used[key])}/${normalizeUnit(
+            `${key}: ${normalizeUnit(key, used[key] ?? '0')}/${normalizeUnit(
               key,
               this.spec.hard[key]
             )}`
@@ -75,12 +102,14 @@ class ResourceQuota extends makeKubeObject<KubeResourceQuota>('resourceQuota') {
 
   get resourceStats() {
     const stats: { name: string; hard: string; used: string }[] = [];
-    this.status.hard &&
-      Object.keys(this.status.hard).forEach(key => {
+    const status = this.jsonData.status;
+    const used = status?.used ?? {};
+    status?.hard &&
+      Object.keys(status.hard).forEach(key => {
         stats.push({
           name: key,
-          hard: `${this.status.hard[key]}`,
-          used: `${this.status.used[key]}`,
+          hard: `${status.hard[key]}`,
+          used: `${used[key] ?? '0'}`,
         });
       });
     return stats;

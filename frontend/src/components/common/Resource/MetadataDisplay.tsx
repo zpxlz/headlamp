@@ -1,45 +1,61 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { Icon } from '@iconify/react';
-import { Box } from '@mui/material';
-import Grid from '@mui/material/Grid';
-import IconButton from '@mui/material/IconButton';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import { Theme } from '@mui/material/styles';
 import Typography, { TypographyProps } from '@mui/material/Typography';
-import makeStyles from '@mui/styles/makeStyles';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { ResourceClasses } from '../../../lib/k8s';
-import { KubeObject, KubeObjectInterface, KubeOwnerReference } from '../../../lib/k8s/cluster';
+import { ResourceClasses, useSelectedClusters } from '../../../lib/k8s';
+import { KubeOwnerReference } from '../../../lib/k8s/cluster';
+import { KubeObject } from '../../../lib/k8s/KubeObject';
 import { localeDate } from '../../../lib/util';
 import { NameValueTable, NameValueTableRow } from '../../common/SimpleTable';
 import Link from '../Link';
 import { LightTooltip } from '../Tooltip';
 
-export const useMetadataDisplayStyles = makeStyles(theme => ({
-  metadataValueLabel: {
-    color: theme.palette.text.primary,
-    backgroundColor: theme.palette.metadataBgColor,
-    fontSize: theme.typography.pxToRem(16),
-    wordBreak: 'break-word',
-    paddingLeft: theme.spacing(1),
-    paddingRight: theme.spacing(1),
-    marginRight: theme.spacing(1),
-    overflow: 'hidden',
-    whiteSpace: 'nowrap',
-    overflowWrap: 'anywhere',
-    textOverflow: 'ellipsis',
-  },
-}));
+type ExtraRowsFunc<T extends KubeObject> = (resource: T) => NameValueTableRow[] | null;
 
-type ExtraRowsFunc = (resource: KubeObjectInterface) => NameValueTableRow[] | null;
+export const metadataStyles = (theme: Theme) => ({
+  color: theme.palette.text.primary,
+  backgroundColor: theme.palette.metadataBgColor,
+  fontSize: theme.typography.pxToRem(16),
+  wordBreak: 'break-word',
+  paddingLeft: theme.spacing(1),
+  paddingRight: theme.spacing(1),
+  marginRight: theme.spacing(1),
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  overflowWrap: 'anywhere',
+  textOverflow: 'ellipsis',
+});
 
-export interface MetadataDisplayProps {
-  resource: KubeObject;
-  extraRows?: ExtraRowsFunc | NameValueTableRow[] | null;
+export interface MetadataDisplayProps<T extends KubeObject = KubeObject> {
+  resource: T;
+  extraRows?: ExtraRowsFunc<T> | NameValueTableRow[] | null;
 }
 
-export function MetadataDisplay(props: MetadataDisplayProps) {
+export function MetadataDisplay<T extends KubeObject>(props: MetadataDisplayProps<T>) {
   const { resource, extraRows } = props;
   const { t } = useTranslation();
-  let makeExtraRows: ExtraRowsFunc;
+  const shouldShowCluster = useSelectedClusters().length > 1;
+
+  let makeExtraRows: ExtraRowsFunc<T>;
 
   function makeOwnerReferences(ownerReferences: KubeOwnerReference[]) {
     if (!resource || ownerReferences === undefined) {
@@ -53,18 +69,38 @@ export function MetadataDisplay(props: MetadataDisplayProps) {
 
     return ownerReferences
       .map((ownerRef, i) => {
-        if (ownerRef.kind in ResourceClasses) {
+        // Match both kind AND apiVersion to avoid linking to the wrong resource when
+        // different API groups share the same kind name (e.g. batch/v1 Job vs a CRD Job).
+        const matchingClass =
+          ownerRef.kind in ResourceClasses
+            ? (() => {
+                const cls = ResourceClasses[ownerRef.kind as keyof typeof ResourceClasses];
+                const apiVersions = Array.isArray(cls.apiVersion)
+                  ? cls.apiVersion
+                  : [cls.apiVersion];
+                const apiVersionMatches = apiVersions.includes(ownerRef.apiVersion);
+                return apiVersionMatches ? cls : null;
+              })()
+            : null;
+
+        if (matchingClass) {
           let routeName;
           try {
-            routeName = new ResourceClasses[ownerRef.kind]().detailsRoute;
+            routeName = matchingClass.detailsRoute;
           } catch (e) {
-            console.error(`Error getting routeName for {ownerRef.kind}`, e);
-            return null;
+            console.error(`Error getting routeName for ${ownerRef.kind}`, e);
+            return (
+              <>
+                {`${ownerRef.kind}: ${ownerRef.name}`}
+                {i < numItems - 1 && <br />}
+              </>
+            );
           }
           return (
             <>
               <Link
                 routeName={routeName}
+                activeCluster={resource.cluster}
                 params={{ name: ownerRef.name, namespace: resource.metadata.namespace }}
               >
                 {ownerRef.kind}: {ownerRef.name}
@@ -100,11 +136,19 @@ export function MetadataDisplay(props: MetadataDisplayProps) {
       {
         name: t('glossary|Namespace'),
         value: resource.metadata.namespace && (
-          <Link routeName={'namespace'} params={{ name: resource.metadata.namespace }}>
+          <Link
+            routeName={'namespace'}
+            params={{ name: resource.metadata.namespace }}
+            activeCluster={resource.cluster}
+          >
             {resource.metadata.namespace}
           </Link>
         ),
         hide: !resource.metadata.namespace,
+      },
+      shouldShowCluster && {
+        name: t('glossary|Cluster'),
+        value: resource.cluster,
       },
       {
         name: t('Creation'),
@@ -130,11 +174,11 @@ export function MetadataDisplay(props: MetadataDisplayProps) {
         value: makeOwnerReferences(resource.metadata.ownerReferences || []),
         hide: !resource.metadata.ownerReferences || resource.metadata.ownerReferences.length === 0,
       },
-    ] as NameValueTableRow[]
+    ].filter(Boolean) as NameValueTableRow[]
   ).concat(makeExtraRows(resource) || []);
 
   return (
-    <Box>
+    <Box sx={{ mt: 4 }}>
       <NameValueTable rows={mainRows} />
     </Box>
   );
@@ -152,15 +196,38 @@ interface MetadataDictGridProps {
 }
 
 export function MetadataDictGrid(props: MetadataDictGridProps) {
-  const classes = useMetadataDisplayStyles({});
   const { dict, showKeys = true, gridProps } = props;
+  const { t } = useTranslation();
   const [expanded, setExpanded] = React.useState(false);
   const defaultNumShown = 20;
 
   const keys = Object.keys(dict || []);
 
   const MetadataEntry = React.forwardRef((props: TypographyProps, ref: any) => {
-    return <Typography {...props} className={classes.metadataValueLabel} ref={ref} />;
+    return (
+      <Typography
+        {...props}
+        sx={theme => ({
+          color: theme.palette.text.primary,
+          borderRadius: theme.shape.borderRadius + 'px',
+          backgroundColor: theme.palette.background.muted,
+          border: '1px solid',
+          borderColor: theme.palette.divider,
+          fontSize: theme.typography.pxToRem(14),
+          wordBreak: 'break-word',
+          paddingTop: 0.5,
+          paddingBottom: 0.5,
+          paddingLeft: 1,
+          paddingRight: 1,
+          marginRight: theme.spacing(1),
+          overflow: 'hidden',
+          whiteSpace: 'nowrap',
+          overflowWrap: 'anywhere',
+          textOverflow: 'ellipsis',
+        })}
+        ref={ref}
+      />
+    );
   });
 
   function makeLabel(key: string | number) {
@@ -176,7 +243,7 @@ export function MetadataDictGrid(props: MetadataDictGridProps) {
     // was not working (it would correctly ellipse the text, but the width of it
     // would still extend the area/section where the text is contained).
     if (fullText.length > 50) {
-      shortText = fullText.substr(0, 50) + '…';
+      shortText = fullText.slice(0, 50) + '…';
     }
 
     let labelComponent = <MetadataEntry>{shortText}</MetadataEntry>;
@@ -190,31 +257,34 @@ export function MetadataDictGrid(props: MetadataDictGridProps) {
   }
 
   return (
-    <Grid container spacing={1} justifyContent="flex-start">
-      {keys.length > defaultNumShown && (
-        <Grid item>
-          <IconButton onClick={() => setExpanded(!expanded)} size="small">
-            <Icon icon={expanded ? 'mdi:menu-up' : 'mdi:menu-down'} />
-          </IconButton>
-        </Grid>
-      )}
-      <Grid
-        container
-        item
-        justifyContent="flex-start"
-        spacing={1}
-        style={{
-          maxWidth: '80%',
+    <Box>
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 0.5,
         }}
         {...gridProps}
       >
         {/* Limit the size to two entries until the user chooses to expand the whole section */}
-        {keys.slice(0, expanded ? keys.length : defaultNumShown).map((key, i) => (
-          <Grid key={i} item zeroMinWidth>
-            {makeLabel(key)}
-          </Grid>
+        {keys.slice(0, expanded ? keys.length : defaultNumShown).map(key => (
+          <React.Fragment key={key}>{makeLabel(key)}</React.Fragment>
         ))}
-      </Grid>
-    </Grid>
+      </Box>
+      {keys.length > defaultNumShown && (
+        <Button
+          onClick={() => setExpanded(!expanded)}
+          size="small"
+          startIcon={<Icon icon={expanded ? 'mdi:menu-up' : 'mdi:menu-down'} />}
+          sx={{ mt: 1, mb: 1 }}
+        >
+          {!expanded
+            ? t('translation|Show all labels (+{{count}} more)', {
+                count: keys.length - defaultNumShown,
+              })
+            : t('translation|Show fewer')}
+        </Button>
+      )}
+    </Box>
   );
 }

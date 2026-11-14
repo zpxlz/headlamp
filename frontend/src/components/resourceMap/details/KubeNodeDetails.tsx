@@ -1,0 +1,222 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Box } from '@mui/system';
+import { lazy, memo, ReactElement, Suspense, useEffect } from 'react';
+// We use React.lazy below to load the workload classes so we don't create circular dependencies.
+import ConfigDetails from '../../configmap/Details';
+import { CustomResourceDetails } from '../../crd/CustomResourceDetails';
+import CustomResourceDefinitionDetails from '../../crd/Details';
+import DaemonSetDetails from '../../daemonset/Details';
+import { DetailsGridContext } from '../../DetailsViewSection/detailsViewSectionSlice';
+import DeviceClassDetails from '../../device/DeviceClassDetails';
+import ResourceClaimDetails from '../../device/ResourceClaimDetails';
+import ResourceClaimTemplateDetails from '../../device/ResourceClaimTemplateDetails';
+import EndpointDetails from '../../endpoints/Details';
+import EndpointSliceDetails from '../../endpointSlices/Details';
+import BackendTLSPolicyDetails from '../../gateway/BackendTLSPolicyDetails';
+import GatewayClassDetails from '../../gateway/ClassDetails';
+import GatewayDetails from '../../gateway/GatewayDetails';
+import GRPCRouteDetails from '../../gateway/GRPCRouteDetails';
+import HTTPRouteDetails from '../../gateway/HTTPRouteDetails';
+import ReferenceGrantDetails from '../../gateway/ReferenceGrantDetails';
+import TCPRouteDetails from '../../gateway/TCPRouteDetails';
+import UDPRouteDetails from '../../gateway/UDPRouteDetails';
+import HpaDetails from '../../horizontalPodAutoscaler/Details';
+import IngressClassDetails from '../../ingress/ClassDetails';
+import IngressDetails from '../../ingress/Details';
+import JobDetails from '../../job/Details';
+import { LeaseDetails } from '../../lease/Details';
+import { LimitRangeDetails } from '../../limitRange/Details';
+import NamespaceDetails from '../../namespace/Details';
+import { NetworkPolicyDetails } from '../../networkpolicy/Details';
+import NodeDetails from '../../node/Details';
+import PodDetails from '../../pod/Details';
+import PDBDetails from '../../podDisruptionBudget/Details';
+import PriorityClassDetails from '../../priorityClass/Details';
+import ResourceQuotaDetails from '../../resourceQuota/Details';
+import RoleBindingDetails from '../../role/BindingDetails';
+import RoleDetails from '../../role/Details';
+import { RuntimeClassDetails } from '../../runtimeClass/Details';
+import SecretDetails from '../../secret/Details';
+import ServiceDetails from '../../service/Details';
+import ServiceAccountDetails from '../../serviceaccount/Details';
+import StatefulSetDetails from '../../statefulset/Details';
+import VolumeClaimDetails from '../../storage/ClaimDetails';
+import StorageClassDetails from '../../storage/ClassDetails';
+import VolumeAttributesClassDetails from '../../storage/VolumeAttributesClassDetails';
+import VolumeDetails from '../../storage/VolumeDetails';
+import VpaDetails from '../../verticalPodAutoscaler/Details';
+import MutatingWebhookConfigList from '../../webhookconfiguration/MutatingWebhookConfigDetails';
+import ValidatingWebhookConfigurationDetails from '../../webhookconfiguration/ValidatingWebhookConfigDetails';
+import WorkloadDetails from '../../workload/Details';
+
+// Avoid retaining the CronJob detail module unless the selected resource needs it.
+const CronJobDetails = lazy(() => import('../../cronjob/Details'));
+const DeploymentWorkloadDetails = lazy(() =>
+  import('../../../lib/k8s/deployment').then(m => ({
+    default: (props: any) => <WorkloadDetails {...props} workloadKind={m.default} />,
+  }))
+);
+const ReplicaSetWorkloadDetails = lazy(() =>
+  import('../../../lib/k8s/replicaSet').then(m => ({
+    default: (props: any) => <WorkloadDetails {...props} workloadKind={m.default} />,
+  }))
+);
+const JobSetWorkloadDetails = lazy(() =>
+  import('../../../lib/k8s/jobSet').then(m => ({
+    default: (props: any) => <WorkloadDetails {...props} workloadKind={m.default} />,
+  }))
+);
+const LeaderWorkerSetWorkloadDetails = lazy(() =>
+  import('../../../lib/k8s/leaderWorkerSet').then(m => ({
+    default: (props: any) => <WorkloadDetails {...props} workloadKind={m.default} />,
+  }))
+);
+
+const kindComponentMap: Record<
+  string,
+  (props: { name?: string; namespace?: string; cluster?: string }) => ReactElement
+> = {
+  Pod: PodDetails,
+  Deployment: props => (
+    <Suspense fallback={null}>
+      <DeploymentWorkloadDetails {...props} />
+    </Suspense>
+  ),
+  ReplicaSet: props => (
+    <Suspense fallback={null}>
+      <ReplicaSetWorkloadDetails {...props} />
+    </Suspense>
+  ),
+  Job: JobDetails,
+  JobSet: props => (
+    <Suspense fallback={null}>
+      <JobSetWorkloadDetails {...props} />
+    </Suspense>
+  ),
+  LeaderWorkerSet: props => (
+    <Suspense fallback={null}>
+      <LeaderWorkerSetWorkloadDetails {...props} />
+    </Suspense>
+  ),
+  Service: ServiceDetails,
+  CronJob: props => (
+    <Suspense fallback={null}>
+      <CronJobDetails {...props} />
+    </Suspense>
+  ),
+  DaemonSet: DaemonSetDetails,
+  ConfigMap: ConfigDetails,
+  Endpoints: EndpointDetails,
+  EndpointSlice: EndpointSliceDetails,
+  HorizontalPodAutoscaler: HpaDetails,
+  Ingress: IngressDetails,
+  Lease: LeaseDetails,
+  LimitRange: LimitRangeDetails,
+  Namespace: NamespaceDetails,
+  NetworkPolicy: NetworkPolicyDetails,
+  Node: NodeDetails,
+  PodDisruptionBudget: PDBDetails,
+  PriorityClass: PriorityClassDetails,
+  DeviceClass: DeviceClassDetails,
+  ResourceClaim: ResourceClaimDetails,
+  ResourceClaimTemplate: ResourceClaimTemplateDetails,
+  ResourceQuota: ResourceQuotaDetails,
+  ClusterRole: RoleDetails,
+  Role: RoleDetails,
+  RoleBinding: RoleBindingDetails,
+  RuntimeClass: RuntimeClassDetails,
+  Secret: SecretDetails,
+  ServiceAccount: ServiceAccountDetails,
+  StatefulSet: StatefulSetDetails,
+  PersistentVolumeClaim: VolumeClaimDetails,
+  StorageClass: StorageClassDetails,
+  VolumeAttributesClass: VolumeAttributesClassDetails,
+  PersistentVolume: VolumeDetails,
+  VerticalPodAutoscaler: VpaDetails,
+  MutatingWebhookConfiguration: MutatingWebhookConfigList,
+  ValidatingWebhookConfiguration: ValidatingWebhookConfigurationDetails,
+  IngressClass: IngressClassDetails,
+  CustomResourceDefinition: CustomResourceDefinitionDetails,
+  crd: CustomResourceDefinitionDetails,
+  Gateway: GatewayDetails,
+  GatewayClass: GatewayClassDetails,
+  HTTPRoute: HTTPRouteDetails,
+  GRPCRoute: GRPCRouteDetails,
+  TCPRoute: TCPRouteDetails,
+  UDPRoute: UDPRouteDetails,
+  ReferenceGrant: ReferenceGrantDetails,
+  BackendTLSPolicy: BackendTLSPolicyDetails,
+  XBackendTrafficPolicy: BackendTLSPolicyDetails,
+};
+
+export { canRenderDetails } from './supportedKinds';
+
+function DetailsNotFound() {
+  return null;
+}
+
+/**
+ * Shows details page for a given Kube resource
+ */
+export const KubeObjectDetails = memo(
+  ({
+    resource,
+    customResourceDefinition,
+  }: {
+    resource: {
+      kind: string;
+      cluster?: string;
+      metadata: { name: string; namespace?: string };
+    };
+    customResourceDefinition?: string;
+  }) => {
+    const { cluster, kind } = resource;
+    const { name, namespace } = resource.metadata;
+
+    const Component =
+      Object.entries(kindComponentMap).find(
+        ([key]) => key.toLowerCase() === kind?.toLowerCase()
+      )?.[1] ?? DetailsNotFound;
+
+    const content = customResourceDefinition ? (
+      <CustomResourceDetails
+        crName={name}
+        crd={customResourceDefinition}
+        namespace={namespace!}
+        cluster={cluster}
+      />
+    ) : (
+      <Component name={name} namespace={namespace} cluster={cluster} />
+    );
+
+    useEffect(() => {
+      if (!kindComponentMap[kind]) {
+        console.error(
+          `No details component for kind ${kind} was found. See KubeNodeDetails.tsx for more info`
+        );
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [kind, kindComponentMap]);
+
+    return (
+      <DetailsGridContext.Provider value={{ isInPanel: true }}>
+        <Box>{content}</Box>
+      </DetailsGridContext.Provider>
+    );
+  }
+);

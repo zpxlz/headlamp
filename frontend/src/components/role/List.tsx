@@ -1,96 +1,85 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSelectedClusters } from '../../lib/k8s';
 import ClusterRole from '../../lib/k8s/clusterRole';
 import Role from '../../lib/k8s/role';
-import { useErrorState, useFilterFunc } from '../../lib/util';
+import { useNamespaces } from '../../redux/filterSlice';
 import Link from '../common/Link';
 import ResourceListView from '../common/Resource/ResourceListView';
+import { ColumnType } from '../common/Resource/ResourceTable';
 
-interface RolesDict {
-  [kind: string]: Role[] | null;
-}
-
-export default function RoleList() {
-  const [roles, setRoles] = React.useState<RolesDict | null>(null);
-  const [roleError, setRolesError] = useErrorState(setupRoles);
-  const [clusterRoleError, setClusterRolesError] = useErrorState(setupClusterRoles);
+export default function RoleList({ namespaces }: { namespaces?: string[] }) {
   const { t } = useTranslation('glossary');
-  const filterFunc = useFilterFunc(['.jsonData.kind']);
+  const selectedNamespaces = useNamespaces();
+  const { items: roles, errors: rolesErrors } = Role.useList({
+    namespace: namespaces ?? selectedNamespaces,
+  });
+  const { items: clusterRoles, errors: clusterRolesErrors } = ClusterRole.useList();
 
-  function setupRolesWithKind(newRoles: Role[] | null, kind: string) {
-    setRoles(oldRoles => ({ ...(oldRoles || {}), [kind]: newRoles }));
-  }
+  const clusters = useSelectedClusters();
+  const isMultiCluster = clusters.length > 1;
 
-  function setupRoles(roles: Role[] | null) {
-    setupRolesWithKind(roles, 'Role');
-  }
-
-  function setupClusterRoles(roles: ClusterRole[] | null) {
-    setupRolesWithKind(roles, 'ClusterRole');
-  }
-
-  function getJointItems() {
-    if (roles === null) {
+  const allRoles = React.useMemo(() => {
+    if (roles === null && clusterRoles === null) {
       return null;
     }
 
-    let joint: Role[] = [];
-    let hasItems = false;
+    return roles ? roles.concat(clusterRoles || []) : clusterRoles;
+  }, [roles, clusterRoles]);
 
-    for (const items of Object.values(roles)) {
-      if (items !== null) {
-        joint = joint.concat(items);
-        hasItems = true;
-      }
+  const allErrors = React.useMemo(() => {
+    if (rolesErrors === null && clusterRolesErrors === null) {
+      return null;
     }
 
-    return hasItems ? joint : null;
-  }
-
-  function getErrorMessage() {
-    if (getJointItems() === null) {
-      return Role.getErrorMessage(roleError || clusterRoleError);
-    }
-
-    return null;
-  }
-
-  Role.useApiList(setupRoles, setRolesError);
-  ClusterRole.useApiList(setupClusterRoles, setClusterRolesError);
+    return [...(rolesErrors ?? []), ...(clusterRolesErrors ?? [])];
+  }, [rolesErrors, clusterRolesErrors]);
 
   return (
     <ResourceListView
       title={t('Roles')}
-      filterFunction={filterFunc}
-      errorMessage={getErrorMessage()}
+      errors={allErrors}
       columns={[
         'type',
         {
           label: t('translation|Name'),
-          getter: item => (
+          getValue: item => item.metadata.name,
+          gridTemplate: 'auto',
+          render: item => (
             <Link
               routeName={item.metadata.namespace ? 'role' : 'clusterrole'}
               params={{
                 namespace: item.metadata.namespace || '',
                 name: item.metadata.name,
+                cluster: item.cluster,
               }}
             >
               {item.metadata.name}
             </Link>
           ),
-          sort: (r1: Role, r2: Role) => {
-            if (r1.metadata.name < r2.metadata.name) {
-              return -1;
-            } else if (r1.metadata.name > r2.metadata.name) {
-              return 1;
-            }
-            return 0;
-          },
         },
         'namespace',
+        ...(isMultiCluster ? (['cluster'] as ColumnType[]) : ([] as ColumnType[])),
+        'labels',
         'age',
       ]}
-      data={getJointItems()}
+      data={allRoles}
       id="headlamp-roles"
     />
   );

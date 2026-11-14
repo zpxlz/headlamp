@@ -1,8 +1,6 @@
----
-title: "Interface: ErrorBoundaryEvent"
-linkTitle: "ErrorBoundaryEvent"
-slug: "plugin_registry.ErrorBoundaryEvent"
----
+[API](../API.md) / [plugin/registry](../modules/plugin_registry.md) / ErrorBoundaryEvent
+
+# Interface: ErrorBoundaryEvent
 
 [plugin/registry](../modules/plugin_registry.md).ErrorBoundaryEvent
 
@@ -18,7 +16,7 @@ The error that was thrown.
 
 #### Defined in
 
-[redux/headlampEventSlice.ts:78](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/redux/headlampEventSlice.ts#L78)
+[redux/headlampEventSlice.ts:78](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/redux/headlampEventSlice.ts#L78)
 
 ___
 
@@ -28,4 +26,4 @@ ___
 
 #### Defined in
 
-[redux/headlampEventSlice.ts:76](https://github.com/headlamp-k8s/headlamp/blob/2ce94491/frontend/src/redux/headlampEventSlice.ts#L76)
+[redux/headlampEventSlice.ts:76](https://github.com/kubernetes-sigs/headlamp/blob/072d2509b/frontend/src/redux/headlampEventSlice.ts#L76)

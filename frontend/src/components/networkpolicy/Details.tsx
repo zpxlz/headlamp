@@ -1,4 +1,21 @@
-import { Box, Typography } from '@mui/material';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router';
 import { matchExpressionSimplifier, matchLabelsSimplifier } from '../../lib/k8s';
@@ -8,12 +25,19 @@ import NetworkPolicy, {
   NetworkPolicyIngressRule,
   NetworkPolicyPort,
 } from '../../lib/k8s/networkpolicy';
-import { DetailsGrid, NameValueTable, SectionBox, useMetadataDisplayStyles } from '../common';
+import NameValueTable from '../common/NameValueTable';
+import { DetailsGrid } from '../common/Resource';
+import { metadataStyles } from '../common/Resource';
+import SectionBox from '../common/SectionBox';
 
-export function NetworkPolicyDetails() {
+export function NetworkPolicyDetails(props: {
+  name?: string;
+  namespace?: string;
+  cluster?: string;
+}) {
+  const params = useParams<{ namespace: string; name: string }>();
+  const { name = params.name, namespace = params.namespace, cluster } = props;
   const { t } = useTranslation(['glossary', 'translation']);
-  const { name, namespace } = useParams<{ name: string; namespace: string }>();
-  const classes = useMetadataDisplayStyles();
 
   function prepareMatchLabelsAndExpressions(
     matchLabels: LabelSelector['matchLabels'],
@@ -25,12 +49,12 @@ export function NetworkPolicyDetails() {
     return (
       <>
         {matchLabelsSimplified.map(label => (
-          <Typography className={classes.metadataValueLabel} display="inline">
+          <Typography sx={metadataStyles} display="inline">
             {label}
           </Typography>
         ))}
         {matchExpressionsSimplified.map(expression => (
-          <Typography className={classes.metadataValueLabel} display="inline">
+          <Typography sx={metadataStyles} display="inline">
             {expression}
           </Typography>
         ))}
@@ -41,8 +65,28 @@ export function NetworkPolicyDetails() {
   function PodSelector(props: { networkPolicy: NetworkPolicy }) {
     const { networkPolicy } = props;
     return prepareMatchLabelsAndExpressions(
-      networkPolicy.jsonData.spec?.podSelector?.matchLabels,
-      networkPolicy.jsonData.spec?.podSelector?.matchExpressions
+      networkPolicy.spec?.podSelector?.matchLabels,
+      networkPolicy.spec?.podSelector?.matchExpressions
+    );
+  }
+
+  function Port(props: { port: NetworkPolicyPort }) {
+    const { port } = props;
+    const { port: portValue, endPort, protocol } = port;
+    const hasRange =
+      typeof portValue === 'number' && typeof endPort === 'number' && endPort !== portValue;
+    const basePort = portValue ?? endPort;
+
+    if (basePort === undefined && !protocol) {
+      return null;
+    }
+
+    return (
+      <Box>
+        {protocol ? `${protocol}:` : ''}
+        {basePort}
+        {hasRange ? `:${endPort}` : ''}
+      </Box>
     );
   }
 
@@ -61,10 +105,8 @@ export function NetworkPolicyDetails() {
               rows={[
                 {
                   name: t('Ports'),
-                  value: item.ports?.map((port: NetworkPolicyPort) => (
-                    <Box>
-                      {port.protocol}:{port.port}
-                    </Box>
+                  value: item.ports?.map((port: NetworkPolicyPort, index) => (
+                    <Port key={index} port={port} />
                   )),
                 },
                 {
@@ -129,35 +171,59 @@ export function NetworkPolicyDetails() {
               rows={[
                 {
                   name: t('Ports'),
-                  value: item.ports?.map((port: NetworkPolicyPort) => (
-                    <Box>
-                      {port.protocol}:{port.port}
-                    </Box>
+                  value: item.ports?.map((port: NetworkPolicyPort, index) => (
+                    <Port key={index} port={port} />
                   )),
-                },
-                {
-                  name: t('translation|To'),
-                  value: '',
-                },
-                {
-                  name: t('ipBlock'),
-                  value: item.to?.map(to => {
-                    const { cidr, except = [] } = to.ipBlock || {};
-                    if (!cidr) {
-                      return <></>;
-                    }
-                    if (cidr && except.length === 0) {
-                      return <>{`cidr: ${cidr}`}</>;
-                    }
-                    return (
-                      <>{`cidr: ${cidr}, ${t('except: {{ cidrExceptions }}', {
-                        cidrExceptions: except.join(', '),
-                      })}`}</>
-                    );
-                  }),
                 },
               ]}
             />
+            {item.to && item.to.length > 0 && (
+              <Box sx={{ mt: 2 }}>
+                <Typography sx={{ fontWeight: 600, mb: 1 }}>{t('translation|To')}</Typography>
+                <NameValueTable
+                  rows={[
+                    {
+                      name: t('ipBlock'),
+                      value: item.to?.map(to => {
+                        const { cidr, except = [] } = to.ipBlock || {};
+                        if (!cidr) {
+                          return <></>;
+                        }
+                        if (cidr && except.length === 0) {
+                          return <>{`cidr: ${cidr}`}</>;
+                        }
+                        return (
+                          <>{`cidr: ${cidr}, ${t('except: {{ cidrExceptions }}', {
+                            cidrExceptions: except.join(', '),
+                          })}`}</>
+                        );
+                      }),
+                    },
+                    {
+                      name: t('namespaceSelector'),
+                      value: item.to?.map(to => {
+                        if (!to.namespaceSelector) {
+                          return <></>;
+                        }
+                        const { matchLabels = {}, matchExpressions = [] } =
+                          to.namespaceSelector || {};
+                        return prepareMatchLabelsAndExpressions(matchLabels, matchExpressions);
+                      }),
+                    },
+                    {
+                      name: t('podSelector'),
+                      value: item.to?.map(to => {
+                        if (!to.podSelector) {
+                          return <></>;
+                        }
+                        const { matchLabels = {}, matchExpressions = [] } = to.podSelector || {};
+                        return prepareMatchLabelsAndExpressions(matchLabels, matchExpressions);
+                      }),
+                    },
+                  ]}
+                />
+              </Box>
+            )}
           </SectionBox>
         ))}
       </>
@@ -169,6 +235,7 @@ export function NetworkPolicyDetails() {
       resourceType={NetworkPolicy}
       name={name}
       namespace={namespace}
+      cluster={cluster}
       withEvents
       extraInfo={item =>
         item && [
@@ -176,17 +243,22 @@ export function NetworkPolicyDetails() {
             name: t('Pod Selector'),
             value: <PodSelector networkPolicy={item} />,
           },
+          {
+            name: t('Policy Types'),
+            value: item.policyTypes.join(', '),
+            hide: !item.policyTypes.length,
+          },
         ]
       }
       extraSections={item =>
         item && [
           {
             id: 'networkpolicy-ingress',
-            section: <Ingress ingress={item.jsonData.spec.ingress} />,
+            section: <Ingress ingress={item.spec?.ingress ?? []} />,
           },
           {
             id: 'networkpolicy-egress',
-            section: <Egress egress={item.jsonData.spec.egress} />,
+            section: <Egress egress={item.spec?.egress ?? []} />,
           },
         ]
       }

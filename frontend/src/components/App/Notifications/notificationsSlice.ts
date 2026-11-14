@@ -1,5 +1,22 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import _ from 'lodash';
+import { encodeBase64 } from '../../../helpers/base64';
 import { getCluster } from '../../../lib/cluster';
 
 /**
@@ -98,7 +115,7 @@ export class Notification implements NotificationIface {
       }
     }
     // generate the id based on the message and the date attached to a notification
-    this.id = btoa(unescape(encodeURIComponent(`${this.date},${this.message},${this.cluster}`)));
+    this.id = encodeBase64(`${this.date},${this.message},${this.cluster}`);
   }
 
   prepareMessage(message: string) {
@@ -172,15 +189,44 @@ function storeNotifications(
  * @returns An array of NotificationIface objects from localStorage.
  */
 export function loadNotifications(): NotificationIface[] {
-  const localStorageItem = global.localStorage.getItem('notifications');
-  const notifications = JSON.parse(localStorageItem || '[]');
+  let localStorageItem: string | null = null;
+  try {
+    localStorageItem = localStorage.getItem('notifications');
+  } catch (e) {
+    // Storage access can be disabled/restricted (e.g. blocked cookies/storage),
+    // in which case getItem itself throws. Treat that as "no notifications".
+    console.warn('Failed to read notifications from localStorage, returning empty array:', e);
+    return [];
+  }
+
+  let notifications: unknown;
+  try {
+    notifications = JSON.parse(localStorageItem || '[]');
+  } catch (e) {
+    // Corrupt/invalid JSON in localStorage must not crash the app on boot:
+    // loadNotifications() runs as the slice initialState, before any error
+    // boundary mounts. Treat unparseable data as "no notifications".
+    console.warn('Failed to parse notifications from localStorage, returning empty array:', e);
+    return [];
+  }
 
   // getting an error here .map is not a function here some times, so we return [] to handle this
   if (!Array.isArray(notifications)) {
     return [];
   }
 
-  return notifications.map((n: any) => Notification.fromJSON(n).toJSON());
+  return notifications
+    .filter(
+      (n: any) =>
+        n !== null &&
+        typeof n === 'object' &&
+        !Array.isArray(n) &&
+        typeof n.id === 'string' &&
+        // A non-string message would make Notification.prepareMessage() throw;
+        // null/undefined are fine as the constructor defaults them to ''.
+        (n.message === null || n.message === undefined || typeof n.message === 'string')
+    )
+    .map((n: any) => Notification.fromJSON(n).toJSON());
 }
 
 function mergeNotifications(

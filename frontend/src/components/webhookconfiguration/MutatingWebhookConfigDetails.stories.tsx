@@ -1,12 +1,24 @@
-import { Meta, Story } from '@storybook/react';
-import MWC, { KubeMutatingWebhookConfiguration } from '../../lib/k8s/mutatingWebhookConfiguration';
-import { TestContext } from '../../test';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import MutatingWebhookConfigDetails from './MutatingWebhookConfigDetails';
 import { createMWC } from './storyHelper';
-
-const usePhonyGet: KubeMutatingWebhookConfiguration['useGet'] = (withService: boolean) => {
-  return [new MWC(createMWC(withService)), null, () => {}, () => {}] as any;
-};
 
 export default {
   title: 'WebhookConfiguration/MutatingWebhookConfig/Details',
@@ -17,30 +29,54 @@ export default {
       return <Story />;
     },
   ],
+  parameters: {
+    msw: {
+      handlers: {
+        storyBase: [
+          http.get(
+            `${API_BASE}/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations`,
+            () => HttpResponse.error()
+          ),
+        ],
+      },
+    },
+  },
 } as Meta;
 
-interface MockerStory {
-  withService: boolean;
-}
-
-const Template: Story<MockerStory> = args => {
-  const { withService } = args;
-
-  MWC.useGet = () => usePhonyGet(withService);
-
+const Template: StoryFn = () => {
   return (
-    <TestContext>
+    <TestContext routerMap={{ name: 'my-mwc' }}>
       <MutatingWebhookConfigDetails />;
     </TestContext>
   );
 };
 
 export const WithService = Template.bind({});
-WithService.args = {
-  withService: true,
+
+WithService.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(
+          `${API_BASE}/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations/my-mwc`,
+          () => HttpResponse.json(createMWC(true))
+        ),
+      ],
+    },
+  },
 };
 
 export const WithURL = Template.bind({});
-WithURL.args = {
-  withService: false,
+
+WithURL.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(
+          `${API_BASE}/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations/my-mwc`,
+          () => HttpResponse.json(createMWC(false))
+        ),
+      ],
+    },
+  },
 };

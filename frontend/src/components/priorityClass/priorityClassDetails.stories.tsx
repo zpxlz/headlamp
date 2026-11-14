@@ -1,31 +1,41 @@
-import { Meta, Story } from '@storybook/react';
-import { KubeObject, KubeObjectClass } from '../../lib/k8s/cluster';
-import Event from '../../lib/k8s/event';
-import PriorityClass, { KubePriorityClass } from '../../lib/k8s/priorityClass';
-import { TestContext } from '../../test';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { http, HttpResponse } from 'msw';
+import { API_BASE, TestContext } from '../../test';
 import HPADetails from './Details';
 
-const usePhonyGet: KubeObjectClass['useGet'] = () => {
-  return [
-    new PriorityClass({
-      description: 'Mission Critical apps.',
-      kind: 'PriorityClass',
-      metadata: {
-        annotations: {
-          'kubectl.kubernetes.io/last-applied-configuration':
-            '{"apiVersion":"scheduling.k8s.io/v1","description":"Mission Critical apps.","globalDefault":false,"kind":"PriorityClass","metadata":{"annotations":{},"name":"high-priority-apps"},"preemptionPolicy":"PreemptLowerPriority","value":1000000}\n',
-        },
-        selfLink: '',
-        creationTimestamp: '2022-10-26T13:46:17Z',
-        generation: 1,
-        name: 'high-priority-apps',
-        resourceVersion: '6474045',
-        uid: '4cfbe956-a997-4b58-8ea3-18655d0ba8a9',
-      },
-      preemptionPolicy: 'PreemptLowerPriority',
-      value: 1000000,
-    } as KubePriorityClass),
-  ] as any;
+const mockItem = {
+  description: 'Mission Critical apps.',
+  kind: 'PriorityClass',
+  metadata: {
+    annotations: {
+      'kubectl.kubernetes.io/last-applied-configuration':
+        '{"apiVersion":"scheduling.k8s.io/v1","description":"Mission Critical apps.","globalDefault":false,"kind":"PriorityClass","metadata":{"annotations":{},"name":"high-priority-apps"},"preemptionPolicy":"PreemptLowerPriority","value":1000000}\n',
+    },
+    selfLink: '',
+    creationTimestamp: '2022-10-26T13:46:17Z',
+    generation: 1,
+    name: 'high-priority-apps',
+    resourceVersion: '6474045',
+    uid: '4cfbe956-a997-4b58-8ea3-18655d0ba8a9',
+  },
+  preemptionPolicy: 'PreemptLowerPriority',
+  value: 1000000,
 };
 
 export default {
@@ -41,48 +51,44 @@ export default {
       );
     },
   ],
+  parameters: {
+    msw: {
+      handlers: {
+        storyBase: [
+          http.get(`${API_BASE}/apis/scheduling.k8s.io/v1/priorityclasses`, () =>
+            HttpResponse.error()
+          ),
+        ],
+      },
+    },
+  },
 } as Meta;
-
-interface MockerStory {
-  useGet?: KubeObjectClass['useGet'];
-  useList?: KubeObjectClass['useList'];
-  allowEdit?: boolean;
-}
-
-const Template: Story = (args: MockerStory) => {
-  if (!!args.useGet) {
-    PriorityClass.useGet = args.useGet;
-    Event.objectEvents = async (obj: KubeObject) => {
-      console.log('object:', obj);
-      return [];
-    };
-  }
-  if (!!args.useList) {
-    PriorityClass.useList = args.useList;
-  }
-  if (!!args.allowEdit) {
-    PriorityClass.getAuthorization = (): Promise<{ status: any }> => {
-      return new Promise(resolve => {
-        resolve({ status: { allowed: true, reason: '', code: 200 } });
-      });
-    };
-  }
-
+const Template: StoryFn = () => {
   return <HPADetails />;
 };
 
 export const Default = Template.bind({});
-Default.args = {
-  useGet: usePhonyGet,
-  allowEdit: true,
-};
-
-export const NoItemYet = Template.bind({});
-NoItemYet.args = {
-  useGet: () => [null, null, () => {}, () => {}] as any,
+Default.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(`${API_BASE}/apis/scheduling.k8s.io/v1/priorityclasses/my-endpoint`, () =>
+          HttpResponse.json(mockItem)
+        ),
+      ],
+    },
+  },
 };
 
 export const Error = Template.bind({});
-Error.args = {
-  useGet: () => [null, 'Phony error is phony!', () => {}, () => {}] as any,
+Error.parameters = {
+  msw: {
+    handlers: {
+      story: [
+        http.get(`${API_BASE}/apis/scheduling.k8s.io/v1/priorityclasses/my-endpoint`, () =>
+          HttpResponse.error()
+        ),
+      ],
+    },
+  },
 };

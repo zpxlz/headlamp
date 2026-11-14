@@ -1,5 +1,21 @@
-import { Meta, Story } from '@storybook/react';
-import { KubeObjectInterface } from '../../../lib/k8s/cluster';
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Meta, StoryFn } from '@storybook/react';
+import { KubeObjectInterface } from '../../../lib/k8s/KubeObject';
 import { TestContext } from '../../../test';
 import {
   MetadataDisplay as MetadataDisplayComponent,
@@ -18,7 +34,7 @@ export default {
   ],
 } as Meta;
 
-const Template: Story<MetadataDisplayProps> = args => <MetadataDisplayComponent {...args} />;
+const Template: StoryFn<MetadataDisplayProps<any>> = args => <MetadataDisplayComponent {...args} />;
 
 const mockResource: KubeObjectInterface = {
   kind: 'MyKind',
@@ -80,4 +96,17 @@ WithExtraRows.args = {
       value: 'Some extra value 3',
     },
   ],
+};
+
+export const WithManyLabels = Template.bind({});
+WithManyLabels.args = {
+  resource: {
+    ...mockResource,
+    metadata: {
+      ...mockResource.metadata,
+      labels: Object.fromEntries(
+        Array.from({ length: 25 }, (_, i) => [`label${i + 1}`, `Value ${i + 1}`])
+      ),
+    },
+  },
 };

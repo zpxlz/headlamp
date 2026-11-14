@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 The Kubernetes Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import fs from 'fs';
 import * as AllComps from '.';
 
@@ -11,6 +27,13 @@ const avoidCheck = [
   'ActionsNotifier',
   'AlertNotification',
   'ErrorBoundary',
+  'DropZoneBox',
+  'EventsLifetimeInfo',
+  'PasswordForm',
+  // Internal helper used by the LogViewer/Terminal components. Plugins that
+  // want to override terminal colors should set the `terminal` field on the
+  // AppTheme they pass to `registerAppTheme(...)` instead.
+  'xtermTheme',
 ];
 
 const checkExports = [
@@ -19,6 +42,7 @@ const checkExports = [
   'Chart',
   'ConfirmDialog',
   'ConfirmButton',
+  'CreateResourceButton',
   'Dialog',
   'EmptyContent',
   'ErrorPage',
@@ -36,19 +60,24 @@ const checkExports = [
   'SectionHeader',
   'ShowHideLabel',
   'SimpleTable',
+  'Table',
   'Tabs',
   'Terminal',
   'TileChart',
   'TimezoneSelect',
   'Tooltip',
   'ObjectEventList',
+  'ConditionList',
+  'PhaseLabel',
 ];
+
+const internalExports = ['useObjectEvents'];
 
 function getFilesToVerify() {
   const filesToVerify: string[] = [];
   fs.readdirSync(__dirname).forEach(file => {
     const fileNoSuffix = file.replace(/\.[^/.]+$/, '');
-    if (!avoidCheck.find(suffix => fileNoSuffix.endsWith(suffix))) {
+    if (fileNoSuffix && !avoidCheck.find(suffix => fileNoSuffix.endsWith(suffix))) {
       filesToVerify.push(fileNoSuffix);
     }
   });
@@ -72,12 +101,16 @@ describe('Import tests', () => {
     });
   });
 
-  test('Check imports', () => {
-    filesToVerify.forEach((file: string) => {
-      const r = require(`./${file}`);
+  test('Check imports', async () => {
+    for (const file of filesToVerify) {
+      const r = await import(`./${file}`);
 
       // Check that all components are exported.
       for (const key in r) {
+        if (internalExports.includes(key)) {
+          continue;
+        }
+
         if (key === 'default') {
           // If default, then we try to import by file name.
           expect(AllComps).toHaveProperty(file);
@@ -85,6 +118,6 @@ describe('Import tests', () => {
           expect(AllComps).toHaveProperty(key);
         }
       }
-    });
+    }
   });
 });
